@@ -24,6 +24,10 @@ const DockerConfig = Schema.Struct({
 })
 const decodeDockerConfig = Schema.decodeUnknownOption(DockerConfig)
 
+export class DockerUnavailableError extends Schema.TaggedErrorClass<DockerUnavailableError>()("DockerUnavailableError", {
+  message: Schema.String,
+}) {}
+
 function requireInstance(context: WorkspaceAdapterContext | undefined) {
   if (!context?.instance) throw new Error("Docker adapter requires an instance context")
   return context.instance
@@ -78,6 +82,40 @@ async function snapshotConfig(instanceDirectory: string, target: string) {
 
 async function docker(args: string[]) {
   return run("docker", args)
+}
+
+export async function assertDockerAvailable() {
+  const result = await docker(["info", "--format", "{{.ServerVersion}}"])
+    .then((result) => ({ ok: true as const, stdout: result.stdout }))
+    .catch((error: unknown) => ({ ok: false as const, error }))
+  if (!result.ok) {
+    throw new DockerUnavailableError({
+      message: [
+        "Docker is required for opencode Docker sessions, but Docker is not installed or usable.",
+        "Install Docker, start the Docker daemon, and make sure `docker info` works for this user.",
+        "",
+        `Docker error: ${dockerError(result.error)}`,
+      ].join("\n"),
+    })
+  }
+  if (result.stdout.trim()) return
+  throw new DockerUnavailableError({
+    message: [
+      "Docker is required for opencode Docker sessions, but Docker did not return server information.",
+      "Install Docker, start the Docker daemon, and make sure `docker info` works for this user.",
+    ].join("\n"),
+  })
+}
+
+function dockerError(error: unknown) {
+  if (error && typeof error === "object") {
+    const record = error as Record<string, unknown>
+    const stderr = typeof record.stderr === "string" ? record.stderr.trim() : ""
+    const stdout = typeof record.stdout === "string" ? record.stdout.trim() : ""
+    const message = error instanceof Error ? error.message : ""
+    return stderr || stdout || message || String(error)
+  }
+  return String(error)
 }
 
 async function ensureImage(image: string, setup: string | undefined) {

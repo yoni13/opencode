@@ -44,6 +44,10 @@ export function FormatError(input: unknown): string | undefined {
     return stringField(input, "message") ?? ""
   }
 
+  if (isTaggedError(input, "DockerUnavailableError")) {
+    return stringField(input, "message") ?? ""
+  }
+
   // MCPFailed: { name: string }
   if (NamedError.hasName(input, "MCPFailed")) {
     const data = isRecord(input) && isRecord(input.data) ? stringField(input.data, "name") : undefined
