@@ -18,9 +18,14 @@ describe("attachmentMime", () => {
     expect(await attachmentMime(file)).toBe("text/plain")
   })
 
-  test("rejects binary files", async () => {
+  test("keeps binary files with a fallback mime", async () => {
     const file = new File([Uint8Array.of(0, 255, 1, 2)], "blob.bin", { type: "application/octet-stream" })
-    expect(await attachmentMime(file)).toBeUndefined()
+    expect(await attachmentMime(file)).toBe("application/octet-stream")
+  })
+
+  test("keeps arbitrary browser-reported binary mimes", async () => {
+    const file = new File([Uint8Array.of(0, 255, 1, 2)], "movie.mov", { type: "video/quicktime" })
+    expect(await attachmentMime(file)).toBe("video/quicktime")
   })
 })
 

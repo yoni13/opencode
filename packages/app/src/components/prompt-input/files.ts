@@ -1,6 +1,6 @@
-import { ACCEPTED_FILE_TYPES, ACCEPTED_IMAGE_TYPES } from "@/constants/file-picker"
+import { ACCEPTED_IMAGE_TYPES } from "@/constants/file-picker"
 
-export { ACCEPTED_FILE_TYPES }
+const DEFAULT_MIME = "application/octet-stream"
 
 const IMAGE_MIMES = new Set(ACCEPTED_IMAGE_TYPES)
 const IMAGE_EXTS = new Map([
@@ -61,6 +61,6 @@ export async function attachmentMime(file: File) {
 
   if (textMime(type)) return "text/plain"
   const bytes = new Uint8Array(await file.slice(0, SAMPLE).arrayBuffer())
-  if (!textBytes(bytes)) return
+  if (!textBytes(bytes)) return type || DEFAULT_MIME
   return "text/plain"
 }
