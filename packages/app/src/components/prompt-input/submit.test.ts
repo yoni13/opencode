@@ -264,6 +264,37 @@ describe("prompt submit worktree selection", () => {
     expect(promoted).toEqual([{ directory: "/repo/docker", sessionID: "session-1" }])
   })
 
+  test("ignores duplicate submits while creating a Docker session", async () => {
+    selected = "docker"
+    const submitting: boolean[] = []
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+      onSubmittingChange: (value) => submitting.push(value),
+    })
+    const event = { preventDefault: () => undefined } as unknown as Event
+
+    await Promise.all([submit.handleSubmit(event), submit.handleSubmit(event)])
+
+    expect(createdWorkspaces).toEqual(["/repo/main"])
+    expect(createdSessions).toEqual(["/repo/docker"])
+    expect(submitting).toEqual([true, false])
+  })
+
   test("reads the latest worktree accessor value per submit", async () => {
     const submit = createPromptSubmit({
       info: () => undefined,

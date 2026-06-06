@@ -295,6 +295,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     projectOpen: false,
     projectSearch: "",
   })
+  const [submitting, setSubmitting] = createSignal(false)
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })
   const motion = (value: number) => ({
@@ -1161,6 +1162,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onQueue: props.onQueue,
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
+    onSubmittingChange: setSubmitting,
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1659,16 +1661,30 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   <IconButton
                     data-action="prompt-submit"
                     type="submit"
-                    disabled={!working() && blank()}
+                    disabled={submitting() || (!working() && blank())}
                     tabIndex={store.mode === "normal" ? undefined : -1}
-                    icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                    icon={
+                      submitting()
+                        ? "status"
+                        : stopping()
+                          ? "stop"
+                          : store.mode === "shell"
+                            ? "arrow-undo-down"
+                            : "arrow-up"
+                    }
                     variant="primary"
                     class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)] disabled:opacity-50"
                     style={{
                       "background-image":
                         "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,var(--v2-background-bg-contrast) 0%,var(--v2-background-bg-contrast) 100%)",
                     }}
-                    aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                    aria-label={
+                      submitting()
+                        ? "Creating Docker session"
+                        : stopping()
+                          ? language.t("prompt.action.stop")
+                          : language.t("prompt.action.send")
+                    }
                   />
                 </Tooltip>
               </div>
@@ -1802,12 +1818,26 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     <IconButton
                       data-action="prompt-submit"
                       type="submit"
-                      disabled={!working() && blank()}
+                      disabled={submitting() || (!working() && blank())}
                       tabIndex={store.mode === "normal" ? undefined : -1}
-                      icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "arrow-up"}
+                      icon={
+                        submitting()
+                          ? "status"
+                          : stopping()
+                            ? "stop"
+                            : store.mode === "shell"
+                              ? "arrow-undo-down"
+                              : "arrow-up"
+                      }
                       variant="primary"
                       class="size-8"
-                      aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
+                      aria-label={
+                        submitting()
+                          ? "Creating Docker session"
+                          : stopping()
+                            ? language.t("prompt.action.stop")
+                            : language.t("prompt.action.send")
+                      }
                     />
                   </Tooltip>
                 </div>

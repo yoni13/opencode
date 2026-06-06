@@ -192,6 +192,7 @@ type PromptSubmitInput = {
   onQueue?: (draft: FollowupDraft) => void
   onAbort?: () => void
   onSubmit?: () => void
+  onSubmittingChange?: (submitting: boolean) => void
 }
 
 type CommentItem = {
@@ -277,7 +278,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   }
 
   const seed = (dir: string, info: Session) => {
-    const [, setStore] = serverSync.child(dir)
+    const [, setStore] = serverSync.child(dir, { bootstrap: false })
     setStore("session", (list: Session[]) => {
       const result = Binary.search(list, info.id, (item) => item.id)
       const next = [...list]
@@ -289,6 +290,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       return next
     })
   }
+
+  let submitting = false
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
@@ -321,6 +324,16 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const isNewSession = !params.id
     const shouldAutoAccept = isNewSession && input.autoAccept()
     const worktreeSelection = input.newSessionWorktree?.() || DOCKER_WORKSPACE
+    if (isNewSession && submitting) return
+    if (isNewSession) {
+      submitting = true
+      input.onSubmittingChange?.(true)
+    }
+    const finishSubmitting = () => {
+      if (!isNewSession || !submitting) return
+      submitting = false
+      input.onSubmittingChange?.(false)
+    }
 
     let sessionDirectory = projectDirectory
     let client = sdk.client
@@ -347,6 +360,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
 
         if (!createdWorkspace?.id || !createdWorkspace.directory) {
+          finishSubmitting()
           showToast({
             title: language.t("workspace.create.failed.title"),
             description: language.t("common.requestFailed"),
@@ -360,7 +374,6 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           experimental_workspaceID: createdWorkspace.id,
           throwOnError: true,
         })
-        serverSync.child(sessionDirectory)
       }
 
       if (worktreeSelection === "create") {
@@ -376,6 +389,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
 
         if (!createdWorktree?.directory) {
+          finishSubmitting()
           showToast({
             title: language.t("prompt.toast.worktreeCreateFailed.title"),
             description: language.t("common.requestFailed"),
@@ -422,6 +436,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         navigate(`/${base64Encode(sessionDirectory)}/session/${session.id}`)
       }
     }
+    finishSubmitting()
     if (!session) {
       showToast({
         title: language.t("prompt.toast.promptSendFailed.title"),
