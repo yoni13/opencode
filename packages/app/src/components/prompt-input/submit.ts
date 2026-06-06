@@ -1,9 +1,10 @@
-import type { Message, Session } from "@opencode-ai/sdk/v2/client"
+import type { Message, Part, Session } from "@opencode-ai/sdk/v2/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@opencode-ai/core/util/encode"
 import { Binary } from "@opencode-ai/core/util/binary"
 import { useNavigate, useParams } from "@solidjs/router"
 import { batch, type Accessor } from "solid-js"
+import { reconcile } from "solid-js/store"
 import type { FileSelection } from "@/context/file"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
@@ -27,6 +28,7 @@ type PendingPrompt = {
 
 const pending = new Map<string, PendingPrompt>()
 const DOCKER_WORKSPACE = "docker"
+const REFRESH_SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
 export type FollowupDraft = {
   sessionID: string
@@ -51,6 +53,44 @@ type FollowupSendInput = {
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
 
 const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttachmentPart => part.type === "image")
+
+const byID = <T extends { id: string }>(a: T, b: T) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+async function refreshPromptMessages(input: {
+  client: FollowupSendInput["client"]
+  serverSync: FollowupSendInput["serverSync"]
+  directory: string
+  sessionID: string
+}) {
+  const page = await input.client.session.messages({ sessionID: input.sessionID, limit: 80 })
+  const items = (page.data ?? []).filter((item) => !!item?.info?.id)
+  const messages = items.map((item) => item.info).sort(byID)
+  const parts = items
+    .map((item) => ({
+      id: item.info.id,
+      parts: item.parts.filter((part): part is Part => !!part?.id && !REFRESH_SKIP_PARTS.has(part.type)).sort(byID),
+    }))
+    .filter((item) => item.parts.length > 0)
+  const [, setStore] = input.serverSync.child(input.directory)
+
+  batch(() => {
+    setStore("message", input.sessionID, reconcile(messages, { key: "id" }))
+    for (const item of parts) {
+      setStore("part", item.id, reconcile(item.parts, { key: "id" }))
+    }
+  })
+
+  return messages.some((message) => message.role === "assistant" && !!message.time.completed)
+}
+
+async function refreshPromptMessagesUntilSettled(input: Parameters<typeof refreshPromptMessages>[0]) {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (await refreshPromptMessages(input)) return
+    await sleep(attempt < 5 ? 500 : 1000)
+  }
+}
 
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
@@ -162,6 +202,12 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       parts: requestParts,
       variant: input.draft.variant,
     })
+    void refreshPromptMessagesUntilSettled({
+      client: input.client,
+      serverSync: input.serverSync,
+      directory: input.draft.sessionDirectory,
+      sessionID: input.draft.sessionID,
+    }).catch(() => {})
     return true
   } catch (err) {
     batch(() => {

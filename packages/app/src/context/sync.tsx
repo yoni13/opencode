@@ -2,6 +2,9 @@ import { Binary } from "@opencode-ai/core/util/binary"
 import { useServerSync } from "./server-sync"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
+import { createMemo } from "solid-js"
+import { useParams } from "@solidjs/router"
+import { decode64 } from "@/utils/base64"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -111,6 +114,34 @@ export function applyOptimisticRemove(draft: OptimisticStore, input: OptimisticR
 export const useSync = () => {
   const serverSync = useServerSync()
   const sdk = useSDK()
+  const params = useParams()
+  const directory = createMemo(() => (params.dir ? decode64(params.dir) : undefined) || sdk.directory)
+  const current = createMemo(() => serverSync.createDirSyncContext(directory()))
 
-  return serverSync.createDirSyncContext(sdk.directory)
+  return {
+    get data() {
+      return current().data
+    },
+    get set() {
+      return current().set
+    },
+    get status() {
+      return current().status
+    },
+    get ready() {
+      return current().ready
+    },
+    get project() {
+      return current().project
+    },
+    get session() {
+      return current().session
+    },
+    absolute(path: string) {
+      return current().absolute(path)
+    },
+    get directory() {
+      return current().directory
+    },
+  }
 }
