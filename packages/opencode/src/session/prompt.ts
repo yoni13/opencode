@@ -64,12 +64,44 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
+import { isMedia } from "@/util/media"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
+const UPLOAD_ATTACHMENT_DIR = ".opencode/attachments"
+
+function dataUrlBytes(url: string) {
+  const idx = url.indexOf(",")
+  if (idx === -1) return new Uint8Array()
+  const head = url.slice(0, idx)
+  const body = url.slice(idx + 1)
+  if (head.includes(";base64")) return Buffer.from(body, "base64")
+  return Buffer.from(decodeURIComponent(body))
+}
+
+function uploadFilename(filename: string | undefined) {
+  const name = path.basename(filename ?? "upload").replace(/[^\w.-]+/g, "_")
+  if (!name || name === "." || name === "..") return "upload"
+  return name
+}
+
+function filePartModality(mime: string) {
+  if (mime.startsWith("image/")) return "image"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  if (mime === "application/pdf") return "pdf"
+}
+
+function modelSupportsFilePart(mime: string, model: Provider.Model | undefined) {
+  const modality = filePartModality(mime)
+  if (!modality) return false
+  if (!model) return isMedia(mime)
+  return model.capabilities.input[modality] === true
+}
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -724,12 +756,10 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
       const model = input.model ?? ag.model ?? (yield* currentModel(input.sessionID))
       const same = ag.model && model.providerID === ag.model.providerID && model.modelID === ag.model.modelID
-      const full =
-        !input.variant && ag.variant && same
-          ? yield* provider
-              .getModel(model.providerID, model.modelID)
-              .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
-          : undefined
+      const selectedModel = yield* provider
+        .getModel(model.providerID, model.modelID)
+        .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
+      const full = !input.variant && ag.variant && same ? selectedModel : undefined
       const variant = input.variant ?? (ag.variant && full?.variants?.[ag.variant] ? ag.variant : undefined)
 
       const info: SessionV1.User = {
@@ -779,6 +809,32 @@ export const layer = Layer.effect(
       const assign = (part: Draft<SessionV1.Part>): SessionV1.Part => ({
         ...part,
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
+      })
+
+      const materializeUpload = Effect.fn("SessionPrompt.materializeUpload")(function* (
+        part: Extract<PromptInput["parts"][number], { type: "file" }>,
+      ) {
+        const ctx = yield* InstanceState.context
+        const filename = uploadFilename(part.filename)
+        const relative = path.join(UPLOAD_ATTACHMENT_DIR, info.id, filename)
+        const displayPath = relative.split(path.sep).join("/")
+        const filepath = path.join(ctx.directory, relative)
+        const bytes = dataUrlBytes(part.url)
+        const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+
+        if (runtime)
+          yield* DockerFiles.writeBytes(runtime, DockerFiles.resolvePath(runtime, ctx.directory, relative), bytes).pipe(
+            Effect.catch(Effect.die),
+          )
+        else yield* fsys.writeWithDirs(filepath, bytes).pipe(Effect.catch(Effect.die))
+
+        return {
+          messageID: info.id,
+          sessionID: input.sessionID,
+          type: "text" as const,
+          synthetic: true,
+          text: `Uploaded file "${filename}" (${part.mime}) was saved to ${displayPath}. Use this path to inspect it.`,
+        }
       })
 
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<SessionV1.Part>[]> = Effect.fn(
@@ -859,6 +915,9 @@ export const layer = Layer.effect(
                   { ...part, messageID: info.id, sessionID: input.sessionID },
                 ]
               }
+              const materialized = yield* materializeUpload(part)
+              if (!modelSupportsFilePart(part.mime, selectedModel)) return [materialized]
+              return [materialized, { ...part, messageID: info.id, sessionID: input.sessionID }]
               break
             case "file:": {
               log.info("file", { mime: part.mime })
