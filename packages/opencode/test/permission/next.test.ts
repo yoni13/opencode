@@ -5,7 +5,10 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Database } from "@opencode-ai/core/database/database"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { Permission } from "../../src/permission"
+import { WorkspaceRef } from "../../src/effect/instance-ref"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
@@ -21,6 +24,34 @@ const env = Layer.mergeAll(
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
 )
 const it = testEffect(env)
+const workspaceID = WorkspaceV2.ID.make("wrk_test")
+const docker = Layer.succeed(
+  DockerRuntime.Service,
+  DockerRuntime.Service.of({
+    resolve: (id) =>
+      Effect.succeed(
+        id === workspaceID
+          ? {
+              kind: "docker",
+              image: "opencode-test",
+              container: "opencode-test",
+              hostDirectory: "/tmp/opencode-test",
+              workspacePath: "/workspace",
+              configDirectory: "/root/.config/opencode",
+              createdAt: 1,
+            }
+          : undefined,
+      ),
+    run: () =>
+      Effect.succeed({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        exitCode: 0,
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      }),
+  }),
+)
 
 const rejectAll = (message?: string) =>
   Effect.gen(function* () {
@@ -610,6 +641,43 @@ it.instance(
       yield* rejectAll()
       yield* Fiber.await(fiber)
     }),
+  { git: true },
+)
+
+it.instance(
+  "ask - resolves ask rules immediately in docker workspaces",
+  () =>
+    Effect.gen(function* () {
+      yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      })
+      expect(yield* list()).toHaveLength(0)
+    }).pipe(Effect.provide(docker), Effect.provideService(WorkspaceRef, workspaceID)),
+  { git: true },
+)
+
+it.instance(
+  "ask - keeps deny rules in docker workspaces",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
+        }),
+      )
+      expect(err).toBeInstanceOf(PermissionV1.DeniedError)
+      expect(yield* list()).toHaveLength(0)
+    }).pipe(Effect.provide(docker), Effect.provideService(WorkspaceRef, workspaceID)),
   { git: true },
 )
 

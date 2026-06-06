@@ -58,6 +58,7 @@ import { animate } from "motion"
 import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
 import { readPartText } from "./message-part-text"
+import { partDefaultOpen } from "./message-part-default-open"
 
 async function writeClipboard(text: string): Promise<boolean> {
   const body = typeof document === "undefined" ? undefined : document.body
@@ -615,15 +616,7 @@ export function renderable(part: PartType, showReasoningSummaries = true) {
   return !!PART_MAPPING[part.type]
 }
 
-function toolDefaultOpen(tool: string, shell = false, edit = false) {
-  if (tool === "bash") return shell
-  if (tool === "edit" || tool === "write" || tool === "apply_patch") return edit
-}
-
-export function partDefaultOpen(part: PartType, shell = false, edit = false) {
-  if (part.type !== "tool") return
-  return toolDefaultOpen(part.tool, shell, edit)
-}
+export { partDefaultOpen } from "./message-part-default-open"
 
 export function AssistantParts(props: {
   messages: AssistantMessage[]

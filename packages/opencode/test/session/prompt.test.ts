@@ -1345,6 +1345,7 @@ unixNoLLMServer(
       expect(tool.state.output).toContain("err")
       expect(tool.state.metadata.output).toContain("out")
       expect(tool.state.metadata.output).toContain("err")
+      expect(tool.state.metadata.userShell).toBe(true)
       yield* run.assertNotBusy(chat.id)
     }),
   { config: cfg },

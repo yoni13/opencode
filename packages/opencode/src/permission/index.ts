@@ -7,6 +7,7 @@ import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 
 const log = Log.create({ service: "permission" })
 
@@ -95,6 +96,9 @@ export const layer = Layer.effect(
       }
 
       if (!needsAsk) return
+      const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      if (runtime) return
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {
@@ -225,6 +229,6 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer), Layer.provide(DockerRuntime.defaultLayer))
 
 export * as Permission from "."
