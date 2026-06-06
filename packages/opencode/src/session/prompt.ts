@@ -72,7 +72,6 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const decodeMessageInfo = Schema.decodeUnknownExit(SessionV1.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(SessionV1.Part)
-const UPLOAD_ATTACHMENT_DIR = ".opencode/attachments"
 
 function dataUrlBytes(url: string) {
   const idx = url.indexOf(",")
@@ -87,6 +86,12 @@ function uploadFilename(filename: string | undefined) {
   const name = path.basename(filename ?? "upload").replace(/[^\w.-]+/g, "_")
   if (!name || name === "." || name === "..") return "upload"
   return name
+}
+
+function uploadCandidate(filename: string, index: number) {
+  if (index === 0) return filename
+  const parsed = path.parse(filename)
+  return `${parsed.name}-${index}${parsed.ext}`
 }
 
 function filePartModality(mime: string) {
@@ -816,11 +821,24 @@ export const layer = Layer.effect(
       ) {
         const ctx = yield* InstanceState.context
         const filename = uploadFilename(part.filename)
-        const relative = path.join(UPLOAD_ATTACHMENT_DIR, info.id, filename)
-        const displayPath = relative.split(path.sep).join("/")
-        const filepath = path.join(ctx.directory, relative)
         const bytes = dataUrlBytes(part.url)
         const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+        const uploadRelative: (index: number) => Effect.Effect<string> = (index) =>
+          Effect.gen(function* () {
+            const candidate = uploadCandidate(filename, index)
+            if (index > 999) return uploadCandidate(`${Date.now()}-${filename}`, 0)
+            if (runtime) {
+              const containerPath = DockerFiles.resolvePath(runtime, ctx.directory, candidate)
+              const kind = yield* DockerFiles.stat(runtime, containerPath)
+              if (kind === "missing") return candidate
+              return yield* uploadRelative(index + 1)
+            }
+            if (!(yield* fsys.existsSafe(path.join(ctx.directory, candidate)))) return candidate
+            return yield* uploadRelative(index + 1)
+          })
+        const relative = yield* uploadRelative(0)
+        const displayPath = relative.split(path.sep).join("/")
+        const filepath = path.join(ctx.directory, relative)
 
         if (runtime)
           yield* DockerFiles.writeBytes(runtime, DockerFiles.resolvePath(runtime, ctx.directory, relative), bytes).pipe(

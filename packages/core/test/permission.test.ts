@@ -14,14 +14,20 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionStore } from "@opencode-ai/core/session/store"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { eq } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
+const directory = AbsolutePath.make("/project")
 const database = Database.layerFromPath(":memory:")
 const current = Layer.succeed(
   Location.Service,
-  Location.Service.of(location({ directory: AbsolutePath.make("/project") })),
+  Location.Service.of(location({ directory })),
+)
+const workspaceCurrent = Layer.succeed(
+  Location.Service,
+  Location.Service.of(location({ directory, workspaceID: WorkspaceV2.ID.make("wrk_test") })),
 )
 const events = EventV2.layer.pipe(Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -33,16 +39,20 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(SessionExecution.noopLayer),
 )
 const saved = PermissionSaved.layer.pipe(Layer.provide(database))
-const layer = PermissionV2.locationLayer.pipe(
-  Layer.provideMerge(database),
-  Layer.provideMerge(store),
-  Layer.provideMerge(events),
-  Layer.provideMerge(current),
-  Layer.provideMerge(sessions),
-  Layer.provideMerge(SessionExecution.noopLayer),
-  Layer.provideMerge(saved),
-)
+const permissionLayer = (currentLayer: Layer.Layer<Location.Service>) =>
+  PermissionV2.locationLayer.pipe(
+    Layer.provideMerge(database),
+    Layer.provideMerge(store),
+    Layer.provideMerge(events),
+    Layer.provideMerge(currentLayer),
+    Layer.provideMerge(sessions),
+    Layer.provideMerge(SessionExecution.noopLayer),
+    Layer.provideMerge(saved),
+  )
+const layer = permissionLayer(current)
+const workspaceLayer = permissionLayer(workspaceCurrent)
 const it = testEffect(layer)
+const workspaceIt = testEffect(workspaceLayer)
 
 function setup(rules: PermissionV2.Ruleset = []) {
   return Effect.gen(function* () {
@@ -123,6 +133,22 @@ describe("PermissionV2", () => {
       yield* setRules([])
       expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "ask" })
       expect(yield* service.get(PermissionV2.ID.create("per_test"))).toBeDefined()
+    }),
+  )
+
+  workspaceIt.effect("allows unmatched permissions by default in workspace locations", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "allow" })
+      expect(yield* service.list()).toEqual([])
+
+      yield* setRules([{ action: "read", resource: "*", effect: "ask" }])
+      expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "ask" })
+      expect(yield* service.get(PermissionV2.ID.create("per_test"))).toBeDefined()
+
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      expect(yield* service.ask(assertion())).toEqual({ id: PermissionV2.ID.create("per_test"), effect: "deny" })
     }),
   )
 

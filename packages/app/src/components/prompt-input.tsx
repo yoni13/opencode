@@ -1644,6 +1644,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                     type="submit"
                     disabled={submitting() || (!working() && blank())}
                     tabIndex={store.mode === "normal" ? undefined : -1}
+                    loading={submitting() || stopping()}
                     icon={
                       submitting()
                         ? "status"
@@ -1800,6 +1801,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                       type="submit"
                       disabled={submitting() || (!working() && blank())}
                       tabIndex={store.mode === "normal" ? undefined : -1}
+                      loading={submitting() || stopping()}
                       icon={
                         submitting()
                           ? "status"

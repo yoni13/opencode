@@ -1927,6 +1927,45 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
+  "materializes uploaded files in the workspace root",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const fs = yield* FSUtil.Service
+
+      yield* writeText(path.join(dir, "blob.bin"), "existing")
+      const msg = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "file",
+            mime: "application/octet-stream",
+            url: "data:application/octet-stream;base64,cGF5bG9hZA==",
+            filename: "blob.bin",
+          },
+        ],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+      expect(yield* fs.readFileString(path.join(dir, "blob.bin"))).toBe("existing")
+      expect(yield* fs.readFileString(path.join(dir, "blob-1.bin"))).toBe("payload")
+      expect(yield* fs.existsSafe(path.join(dir, ".opencode", "attachments", msg.info.id, "blob.bin"))).toBe(false)
+      expect(msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("blob-1.bin"))).toBe(
+        true,
+      )
+      expect(msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes(".opencode"))).toBe(
+        false,
+      )
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "keeps stored part order stable when file resolution is async",
   () =>
     Effect.gen(function* () {

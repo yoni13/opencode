@@ -23,6 +23,10 @@
       /* } */
     }
 
+    [data-component="spinner"] {
+      color: var(--icon-invert-base);
+    }
+
     &:hover:not(:disabled) {
       background-color: var(--icon-strong-hover);
     }
@@ -68,6 +72,10 @@
       color: var(--icon-strong-base);
     }
 
+    [data-component="spinner"] {
+      color: var(--icon-strong-base);
+    }
+
     &:disabled {
       background-color: var(--icon-strong-disabled);
       color: var(--icon-invert-base);
@@ -80,6 +88,10 @@
     /* color: var(--icon-base); */
 
     [data-slot="icon-svg"] {
+      color: var(--icon-base);
+    }
+
+    [data-component="spinner"] {
       color: var(--icon-base);
     }
 
@@ -141,6 +153,11 @@
 
   &:focus {
     outline: none;
+  }
+
+  .icon-button-spinner {
+    width: 15px;
+    height: 15px;
   }
 }
 
