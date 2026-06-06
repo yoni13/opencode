@@ -10,6 +10,8 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
 import DESCRIPTION from "./apply_patch.txt"
 import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Format } from "../format"
@@ -26,6 +28,7 @@ export const ApplyPatchTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -216,6 +219,7 @@ export const ApplyPatchTool = Tool.define(
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
 
       for (const change of fileChanges) {
         const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
@@ -223,12 +227,28 @@ export const ApplyPatchTool = Tool.define(
           case "add":
             // Create parent directories (recursive: true is safe on existing/root dirs)
 
-            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+            if (runtime) {
+              yield* DockerFiles.writeBytes(
+                runtime,
+                DockerRuntime.containerPath(runtime, change.filePath),
+                Bom.join(change.newContent, change.bom),
+              )
+            } else {
+              yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+            }
             updates.push({ file: change.filePath, event: "add" })
             break
 
           case "update":
-            yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+            if (runtime) {
+              yield* DockerFiles.writeBytes(
+                runtime,
+                DockerRuntime.containerPath(runtime, change.filePath),
+                Bom.join(change.newContent, change.bom),
+              )
+            } else {
+              yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
+            }
             updates.push({ file: change.filePath, event: "change" })
             break
 
@@ -236,20 +256,31 @@ export const ApplyPatchTool = Tool.define(
             if (change.movePath) {
               // Create parent directories (recursive: true is safe on existing/root dirs)
 
-              yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
-              yield* afs.remove(change.filePath)
+              if (runtime) {
+                yield* DockerFiles.writeBytes(
+                  runtime,
+                  DockerRuntime.containerPath(runtime, change.movePath),
+                  Bom.join(change.newContent, change.bom),
+                )
+                yield* DockerFiles.remove(runtime, DockerRuntime.containerPath(runtime, change.filePath))
+              } else {
+                yield* afs.writeWithDirs(change.movePath!, Bom.join(change.newContent, change.bom))
+                yield* afs.remove(change.filePath)
+              }
               updates.push({ file: change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
             }
             break
 
           case "delete":
-            yield* afs.remove(change.filePath)
+            if (runtime) yield* DockerFiles.remove(runtime, DockerRuntime.containerPath(runtime, change.filePath))
+            else yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
             break
         }
 
         if (edited) {
+          if (runtime) continue
           if (yield* format.file(edited)) {
             yield* Bom.syncFile(afs, edited, change.bom)
           }
@@ -258,17 +289,23 @@ export const ApplyPatchTool = Tool.define(
       }
 
       // Publish file change events
-      for (const update of updates) {
-        yield* events.publish(Watcher.Event.Updated, update)
+      if (!runtime) {
+        for (const update of updates) {
+          yield* events.publish(Watcher.Event.Updated, update)
+        }
       }
 
       // Notify LSP of file changes and collect diagnostics
-      for (const change of fileChanges) {
-        if (change.type === "delete") continue
-        const target = change.movePath ?? change.filePath
-        yield* lsp.touchFile(target, "document")
-      }
-      const diagnostics = yield* lsp.diagnostics()
+      const diagnostics = runtime
+        ? {}
+        : yield* Effect.gen(function* () {
+            for (const change of fileChanges) {
+              if (change.type === "delete") continue
+              const target = change.movePath ?? change.filePath
+              yield* lsp.touchFile(target, "document")
+            }
+            return yield* lsp.diagnostics()
+          })
 
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {

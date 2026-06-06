@@ -575,6 +575,12 @@ export const layer = Layer.effect(
       }
 
       yield* WorkspaceAdapterRuntime.create(adapter, config, env)
+      const target = yield* WorkspaceAdapterRuntime.target(info)
+      if (target.type === "local") {
+        yield* startSync(info)
+        return info
+      }
+
       yield* Effect.all(
         [
           waitEvent({

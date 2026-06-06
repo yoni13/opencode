@@ -4,7 +4,9 @@ import type { Prompt } from "@/context/prompt"
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
 const createdClients: string[] = []
+const createdWorkspaceClients: Array<{ directory: string; workspaceID?: string }> = []
 const createdSessions: string[] = []
+const createdWorkspaces: string[] = []
 const enabledAutoAccept: Array<{ sessionID: string; directory: string }> = []
 const optimistic: Array<{
   directory?: string
@@ -30,6 +32,14 @@ const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 const clientFor = (directory: string) => {
   createdClients.push(directory)
   return {
+    experimental: {
+      workspace: {
+        create: async () => {
+          createdWorkspaces.push(directory)
+          return { data: { id: "wrk_docker", directory: "/repo/docker" } }
+        },
+      },
+    },
     session: {
       create: async () => {
         createdSessions.push(directory)
@@ -132,6 +142,10 @@ beforeAll(async () => {
         client: rootClient,
         url: "http://localhost:4096",
         createClient(opts: any) {
+          createdWorkspaceClients.push({
+            directory: opts.directory,
+            workspaceID: opts.experimental_workspaceID,
+          })
           return clientFor(opts.directory)
         },
       }
@@ -204,7 +218,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   createdClients.length = 0
+  createdWorkspaceClients.length = 0
   createdSessions.length = 0
+  createdWorkspaces.length = 0
   enabledAutoAccept.length = 0
   optimistic.length = 0
   optimisticSeeded.length = 0
@@ -218,6 +234,36 @@ beforeEach(() => {
 })
 
 describe("prompt submit worktree selection", () => {
+  test("creates sessions with the selected Docker workspace", async () => {
+    selected = "docker"
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(createdWorkspaces).toEqual(["/repo/main"])
+    expect(createdWorkspaceClients).toEqual([{ directory: "/repo/docker", workspaceID: "wrk_docker" }])
+    expect(createdSessions).toEqual(["/repo/docker"])
+    expect(sentShell).toEqual(["/repo/docker"])
+    expect(promoted).toEqual([{ directory: "/repo/docker", sessionID: "session-1" }])
+  })
+
   test("reads the latest worktree accessor value per submit", async () => {
     const submit = createPromptSubmit({
       info: () => undefined,

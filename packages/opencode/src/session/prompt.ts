@@ -63,6 +63,7 @@ import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -131,6 +132,7 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
     const { db } = database
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -560,7 +562,6 @@ export const layer = Layer.effect(
 
           const cfg = yield* config.get()
           const sh = Shell.preferred(cfg.shell)
-          const args = Shell.args(sh, input.command, cwd)
           let output = ""
           let aborted = false
 
@@ -603,13 +604,38 @@ export const layer = Layer.effect(
                 { cwd, sessionID: input.sessionID, callID: part.callID },
                 { env: {} },
               )
-              const cmd = ChildProcess.make(sh, args, {
-                cwd,
-                extendEnv: true,
-                env: { ...shellEnv.env, TERM: "dumb" },
-                stdin: "ignore",
-                forceKillAfter: "3 seconds",
-              })
+              const runtime =
+                docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+              const cmd = runtime
+                ? ChildProcess.make(
+                    "docker",
+                    [
+                      "exec",
+                      "-i",
+                      "-w",
+                      DockerRuntime.containerPath(runtime, cwd),
+                      ...Object.entries({ ...shellEnv.env, TERM: "dumb" }).flatMap(([key, value]) =>
+                        value === undefined ? [] : ["-e", `${key}=${value}`],
+                      ),
+                      runtime.container,
+                      "/bin/bash",
+                      "-lc",
+                      input.command,
+                    ],
+                    {
+                      cwd: runtime.hostDirectory,
+                      extendEnv: true,
+                      stdin: "ignore",
+                      forceKillAfter: "3 seconds",
+                    },
+                  )
+                : ChildProcess.make(sh, Shell.args(sh, input.command, cwd), {
+                    cwd,
+                    extendEnv: true,
+                    env: { ...shellEnv.env, TERM: "dumb" },
+                    stdin: "ignore",
+                    forceKillAfter: "3 seconds",
+                  })
               const handle = yield* spawner.spawn(cmd)
               yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
                 Effect.gen(function* () {
@@ -1644,6 +1670,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        DockerRuntime.defaultLayer,
       ),
     ),
   ),

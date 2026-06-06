@@ -26,6 +26,7 @@ type PendingPrompt = {
 }
 
 const pending = new Map<string, PendingPrompt>()
+const DOCKER_WORKSPACE = "docker"
 
 export type FollowupDraft = {
   sessionID: string
@@ -319,12 +320,49 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     const projectDirectory = sdk.directory
     const isNewSession = !params.id
     const shouldAutoAccept = isNewSession && input.autoAccept()
-    const worktreeSelection = input.newSessionWorktree?.() || "main"
+    const worktreeSelection = input.newSessionWorktree?.() || DOCKER_WORKSPACE
 
     let sessionDirectory = projectDirectory
     let client = sdk.client
 
     if (isNewSession) {
+      if (worktreeSelection === "main") {
+        client = sdk.createClient({
+          directory: projectDirectory,
+          experimental_workspaceID: "main",
+          throwOnError: true,
+        })
+      }
+
+      if (worktreeSelection === DOCKER_WORKSPACE) {
+        const createdWorkspace = await client.experimental.workspace
+          .create({ type: "docker", branch: null })
+          .then((x) => x.data)
+          .catch((err) => {
+            showToast({
+              title: language.t("workspace.create.failed.title"),
+              description: errorMessage(err),
+            })
+            return undefined
+          })
+
+        if (!createdWorkspace?.id || !createdWorkspace.directory) {
+          showToast({
+            title: language.t("workspace.create.failed.title"),
+            description: language.t("common.requestFailed"),
+          })
+          return
+        }
+
+        sessionDirectory = createdWorkspace.directory
+        client = sdk.createClient({
+          directory: sessionDirectory,
+          experimental_workspaceID: createdWorkspace.id,
+          throwOnError: true,
+        })
+        serverSync.child(sessionDirectory)
+      }
+
       if (worktreeSelection === "create") {
         const createdWorktree = await client.worktree
           .create({ directory: projectDirectory })
@@ -348,11 +386,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         sessionDirectory = createdWorktree.directory
       }
 
-      if (worktreeSelection !== "main" && worktreeSelection !== "create") {
+      if (worktreeSelection !== "main" && worktreeSelection !== "create" && worktreeSelection !== DOCKER_WORKSPACE) {
         sessionDirectory = worktreeSelection
       }
 
-      if (sessionDirectory !== projectDirectory) {
+      if (sessionDirectory !== projectDirectory && worktreeSelection !== DOCKER_WORKSPACE) {
         client = sdk.createClient({
           directory: sessionDirectory,
           throwOnError: true,

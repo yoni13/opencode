@@ -9,10 +9,13 @@ export * as EditTool from "./edit"
 
 import { Tool, ToolFailure, toolText } from "@opencode-ai/llm"
 import { Cause, Effect, Layer, Schema } from "effect"
+import { DockerRuntime } from "../docker-runtime"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
+import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "edit"
 
@@ -101,6 +104,9 @@ export const layer = Layer.effectDiscard(
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
     const fs = yield* FSUtil.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -137,7 +143,18 @@ export const layer = Layer.effectDiscard(
             }
 
             yield* unableToEdit(assertPermission({ action: "edit", resources: [target.resource], save: ["*"] }))
-            const source = decodeUtf8(yield* unableToEdit(fs.readFile(target.canonical)))
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            const containerTarget = runtime ? DockerRuntime.containerPath(runtime, target.canonical) : undefined
+            const source = decodeUtf8(
+              yield* unableToEdit(
+                runtime && containerTarget
+                  ? DockerFiles.readBytes(runtime, containerTarget)
+                  : fs.readFile(target.canonical),
+              ),
+            )
             const ending = detectLineEnding(source.text)
             const oldString = convertToLineEnding(parameters.oldString, ending)
             const newString = convertToLineEnding(parameters.newString, ending)
@@ -160,13 +177,25 @@ export const layer = Layer.effectDiscard(
                 ? source.text.replaceAll(oldString, newString)
                 : source.text.replace(oldString, newString)
             const next = splitBom(replaced)
-            const result = yield* unableToEdit(
-              files.writeIfUnchanged({
-                target,
-                expected: source.content,
-                content: joinBom(next.text, source.bom || next.bom),
-              }),
-            )
+            const result =
+              runtime && containerTarget
+                ? yield* unableToEdit(
+                    DockerFiles.writeBytes(runtime, containerTarget, joinBom(next.text, source.bom || next.bom)).pipe(
+                      Effect.as({
+                        operation: "write" as const,
+                        target: containerTarget,
+                        resource: target.resource,
+                        existed: true,
+                      }),
+                    ),
+                  )
+                : yield* unableToEdit(
+                    files.writeIfUnchanged({
+                      target,
+                      expected: source.content,
+                      content: joinBom(next.text, source.bom || next.bom),
+                    }),
+                  )
             return { ...result, replacements } satisfies Success
           })
         },

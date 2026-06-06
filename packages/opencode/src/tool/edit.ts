@@ -17,6 +17,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
 import * as Bom from "@/util/bom"
 
 function normalizeLineEndings(text: string): string {
@@ -62,6 +64,7 @@ export const EditTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     return {
       description: DESCRIPTION,
@@ -85,10 +88,16 @@ export const EditTool = Tool.define(
           let diff = ""
           let contentOld = ""
           let contentNew = ""
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
               if (params.oldString === "") {
-                const existed = yield* afs.existsSafe(filePath)
+                const containerPath = runtime ? DockerRuntime.containerPath(runtime, filePath) : undefined
+                const existed =
+                  runtime && containerPath
+                    ? (yield* DockerFiles.stat(runtime, containerPath)) === "file"
+                    : yield* afs.existsSafe(filePath)
                 if (existed) {
                   throw new Error(
                     "oldString cannot be empty when editing an existing file. Provide the exact text to replace, or use write for an intentional full-file replacement.",
@@ -108,6 +117,10 @@ export const EditTool = Tool.define(
                     diff,
                   },
                 })
+                if (runtime && containerPath) {
+                  yield* DockerFiles.writeBytes(runtime, containerPath, Bom.join(contentNew, desiredBom))
+                  return
+                }
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -120,10 +133,22 @@ export const EditTool = Tool.define(
                 return
               }
 
-              const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-              if (!info) throw new Error(`File ${filePath} not found`)
-              if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
-              const source = yield* Bom.readFile(afs, filePath)
+              const containerPath = runtime ? DockerRuntime.containerPath(runtime, filePath) : undefined
+              const info =
+                runtime && containerPath
+                  ? yield* DockerFiles.stat(runtime, containerPath)
+                  : yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+              if (!info || info === "missing") throw new Error(`File ${filePath} not found`)
+              if (info === "directory" || (typeof info === "object" && info.type === "Directory"))
+                throw new Error(`Path is a directory, not a file: ${filePath}`)
+              const source =
+                runtime && containerPath
+                  ? Bom.split(
+                      new TextDecoder("utf-8", { fatal: false }).decode(
+                        yield* DockerFiles.readBytes(runtime, containerPath),
+                      ),
+                    )
+                  : yield* Bom.readFile(afs, filePath)
               contentOld = source.text
 
               const ending = detectLineEnding(contentOld)
@@ -152,6 +177,10 @@ export const EditTool = Tool.define(
                 },
               })
 
+              if (runtime && containerPath) {
+                yield* DockerFiles.writeBytes(runtime, containerPath, Bom.join(contentNew, desiredBom))
+                return
+              }
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
               if (yield* format.file(filePath)) {
                 contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -194,6 +223,17 @@ export const EditTool = Tool.define(
           })
 
           let output = "Edit applied successfully."
+          if (runtime) {
+            return {
+              metadata: {
+                diagnostics: {},
+                diff,
+                filediff,
+              },
+              title: `${path.relative(instance.worktree, filePath)}`,
+              output,
+            }
+          }
           yield* lsp.touchFile(filePath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilePath = FSUtil.normalizePath(filePath)

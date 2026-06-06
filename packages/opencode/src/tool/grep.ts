@@ -3,6 +3,7 @@ import { Schema } from "effect"
 import { Effect, Option } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
@@ -27,6 +28,7 @@ export const GrepTool = Tool.define(
     const fs = yield* FSUtil.Service
     const rg = yield* Ripgrep.Service
     const reference = yield* Reference.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     return {
       description: DESCRIPTION,
@@ -68,6 +70,70 @@ export const GrepTool = Tool.define(
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
           const file = info?.type === "Directory" ? undefined : [path.relative(cwd, search)]
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+          if (runtime) {
+            const containerCwd = DockerRuntime.containerPath(runtime, cwd)
+            const result = yield* DockerRuntime.run({
+              runtime,
+              command: [
+                "grep",
+                "-RInE",
+                "--exclude-dir=.git",
+                ...(params.include ? [`--include=${params.include}`] : []),
+                "--",
+                params.pattern,
+                ...(file ?? ["."]),
+              ],
+              cwd: containerCwd,
+              maxOutputBytes: 1024 * 1024,
+              maxErrorBytes: 8 * 1024,
+            })
+            if (result.exitCode === 1) return empty
+            if (result.exitCode !== 0) throw new Error(result.stderr.toString("utf8") || "grep failed")
+            const matches = result.stdout
+              .toString("utf8")
+              .split("\n")
+              .filter(Boolean)
+              .flatMap((row) => {
+                const first = row.indexOf(":")
+                const second = first === -1 ? -1 : row.indexOf(":", first + 1)
+                if (first === -1 || second === -1) return []
+                const file = row.slice(0, first).replace(/^\.\//, "")
+                const line = Number.parseInt(row.slice(first + 1, second), 10)
+                if (!Number.isSafeInteger(line) || line < 1) return []
+                return [{ path: path.posix.join(containerCwd, file), line, text: row.slice(second + 1), mtime: 0 }]
+              })
+            const truncated = matches.length > 100
+            const final = truncated ? matches.slice(0, 100) : matches
+            if (final.length === 0) return empty
+            const output = [`Found ${matches.length} matches${truncated ? " (showing first 100)" : ""}`]
+            let current = ""
+            for (const match of final) {
+              if (current !== match.path) {
+                if (current !== "") output.push("")
+                current = match.path
+                output.push(`${match.path}:`)
+              }
+              const text =
+                match.text.length > MAX_LINE_LENGTH ? match.text.substring(0, MAX_LINE_LENGTH) + "..." : match.text
+              output.push(`  Line ${match.line}: ${text}`)
+            }
+            if (truncated) {
+              output.push("")
+              output.push(
+                `(Results truncated: showing 100 of ${matches.length} matches (${matches.length - 100} hidden). Consider using a more specific path or pattern.)`,
+              )
+            }
+            return {
+              title: params.pattern,
+              metadata: {
+                matches: matches.length,
+                truncated,
+              },
+              output: output.join("\n"),
+            }
+          }
 
           const result = yield* rg.search({
             cwd,

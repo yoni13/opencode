@@ -68,6 +68,7 @@ function configuredWorkspaceID(): WorkspaceV2.ID | undefined {
 
 function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): WorkspaceV2.ID | undefined {
   const workspaceParam = url.searchParams.get("workspace")
+  if (workspaceParam === "main") return undefined
   return sessionWorkspaceID ?? (workspaceParam ? WorkspaceV2.ID.make(workspaceParam) : undefined)
 }
 
@@ -78,6 +79,7 @@ function selectedV2WorkspaceID(
   if (sessionWorkspaceID) return sessionWorkspaceID
   const workspaceParam = url.searchParams.get("workspace")
   if (!workspaceParam) return undefined
+  if (workspaceParam === "main") return undefined
   const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspaceParam)
   if (Option.isNone(workspaceID)) return InvalidWorkspaceID
   return workspaceID.value

@@ -2,6 +2,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Stream } from "effect"
 import { HttpBody, HttpClient, HttpClientRequest, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { createHash } from "node:crypto"
+import path from "node:path"
 import { ProxyUtil } from "../proxy-util"
 
 let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
@@ -45,7 +46,18 @@ export function embeddedUI(disableEmbeddedWebUi: boolean) {
   if (disableEmbeddedWebUi) return Promise.resolve(null)
   return (embeddedUIPromise ??=
     // @ts-expect-error - generated file at build time
-    import("opencode-web-ui.gen.ts").then((module) => module.default as Record<string, string>).catch(() => null))
+    import("opencode-web-ui.gen.ts")
+      .then((module) => module.default as Record<string, string>)
+      .catch(async () => {
+        const dist = path.resolve(import.meta.dir, "../../../../app/dist")
+        if (!(await Bun.file(path.join(dist, "index.html")).exists())) return null
+        return Object.fromEntries(
+          (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist, onlyFiles: true }))).map((file) => [
+            file.replaceAll("\\", "/"),
+            path.join(dist, file),
+          ]),
+        )
+      }))
 }
 
 function notFound() {

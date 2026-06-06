@@ -32,6 +32,7 @@ import { ToolRegistry } from "./tool/registry"
 import { ApplicationTools } from "./tool/application-tools"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
+import { DockerRuntime } from "./docker-runtime"
 import { Ripgrep } from "./ripgrep"
 import { SessionStore } from "./session/store"
 import { SessionTodo } from "./session/todo"
@@ -103,6 +104,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     ModelsDev.defaultLayer,
     FSUtil.defaultLayer,
     AppProcess.defaultLayer,
+    DockerRuntime.defaultLayer,
     Global.defaultLayer,
     Database.defaultLayer,
     SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),

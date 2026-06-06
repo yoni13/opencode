@@ -22,6 +22,7 @@ import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 
 export { Parameters } from "./shell/prompt"
 
@@ -317,6 +318,41 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     detached: process.platform !== "win32",
   })
 }
+
+function dockerCwd(hostCwd: string, hostRoot: string, containerRoot: string) {
+  const relative = path.relative(hostRoot, hostCwd)
+  if (!relative || relative === ".") return containerRoot
+  if (relative.startsWith("..")) return containerRoot
+  return path.posix.join(containerRoot, relative.split(path.sep).join(path.posix.sep))
+}
+
+function dockerCmd(input: {
+  container: string
+  hostDirectory: string
+  workspacePath: string
+  shell: string
+  command: string
+  cwd: string
+  env: NodeJS.ProcessEnv
+}) {
+  const args = [
+    "exec",
+    "-i",
+    "-w",
+    dockerCwd(input.cwd, input.hostDirectory, input.workspacePath),
+    ...Object.entries(input.env).flatMap(([key, value]) => (value === undefined ? [] : ["--env", `${key}=${value}`])),
+    input.container,
+    Shell.name(input.shell) === "sh" ? "/bin/sh" : "/bin/bash",
+    "-lc",
+    input.command,
+  ]
+  return ChildProcess.make("docker", args, {
+    cwd: input.hostDirectory,
+    env: process.env,
+    stdin: "ignore",
+    detached: process.platform !== "win32",
+  })
+}
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -352,8 +388,15 @@ export const ShellTool = Tool.define(
     const fs = yield* FSUtil.Service
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
+    const dockerRuntime = yield* Effect.serviceOption(DockerRuntime.Service)
     const flags = yield* RuntimeFlags.Service
     const defaultTimeoutMs = flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000
+
+    const dockerWorkspace = Effect.fn("ShellTool.dockerWorkspace")(function* () {
+      const workspaceID = yield* InstanceState.workspaceID
+      if (!workspaceID || dockerRuntime._tag === "None") return
+      return yield* dockerRuntime.value.resolve(workspaceID)
+    })
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
       const lines = yield* spawner
@@ -492,7 +535,20 @@ export const ShellTool = Tool.define(
       const code: number | null = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
-          const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
+          const docker = yield* dockerWorkspace()
+          const handle = yield* spawner.spawn(
+            docker
+              ? dockerCmd({
+                  container: docker.container,
+                  hostDirectory: docker.hostDirectory,
+                  workspacePath: docker.workspacePath,
+                  shell: input.shell,
+                  command: input.command,
+                  cwd: input.cwd,
+                  env: input.env,
+                })
+              : cmd(input.shell, input.command, input.cwd, input.env),
+          )
 
           yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {

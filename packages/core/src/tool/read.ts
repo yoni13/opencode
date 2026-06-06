@@ -7,9 +7,12 @@ import { Cause, Effect, Layer, Schema } from "effect"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { Config } from "../config"
+import { DockerRuntime } from "../docker-runtime"
 import { FileSystem } from "../filesystem"
+import { Location } from "../location"
 import { PermissionV2 } from "../permission"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "read"
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -81,6 +84,9 @@ export const layer = Layer.effectDiscard(
     const registry = yield* ToolRegistry.Service
     const filesystem = yield* FileSystem.Service
     const config = yield* Config.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
     const loadPhoton = yield* Effect.cached(
       Effect.sync(() => {
         ;(globalThis as typeof globalThis & { __OPENCODE_PHOTON_WASM_PATH?: string }).__OPENCODE_PHOTON_WASM_PATH =
@@ -97,6 +103,17 @@ export const layer = Layer.effectDiscard(
             const resolved = yield* filesystem.resolveReadPath(input)
             if (resolved.type === "directory") {
               yield* assertPermission({ action: name, resources: [resolved.resource], save: ["*"] })
+              const runtime =
+                docker._tag === "Some" && currentLocation
+                  ? yield* docker.value.resolve(currentLocation.workspaceID)
+                  : undefined
+              if (runtime) {
+                return yield* DockerFiles.readTool(
+                  runtime,
+                  DockerFiles.resolvePath(runtime, currentLocation!.directory, input.path),
+                  resolved.resource,
+                )
+              }
               return yield* filesystem.listPage(input)
             }
             yield* assertPermission({
@@ -104,6 +121,17 @@ export const layer = Layer.effectDiscard(
               resources: [resolved.resource],
               save: ["*"],
             })
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            if (runtime) {
+              return yield* DockerFiles.readTool(
+                runtime,
+                DockerFiles.resolvePath(runtime, currentLocation!.directory, input.path),
+                resolved.resource,
+              )
+            }
             const content = yield* filesystem.readTool(input, {
               offset: input.offset,
               limit: input.limit,

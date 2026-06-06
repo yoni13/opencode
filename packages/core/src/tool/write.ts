@@ -9,9 +9,12 @@ export * as WriteTool from "./write"
 
 import { Tool, ToolFailure, toolText } from "@opencode-ai/llm"
 import { Cause, Effect, Layer, Schema } from "effect"
+import { DockerRuntime } from "../docker-runtime"
 import { FileMutation } from "../file-mutation"
+import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "write"
 
@@ -54,6 +57,9 @@ export const layer = Layer.effectDiscard(
     const registry = yield* ToolRegistry.Service
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -64,6 +70,21 @@ export const layer = Layer.effectDiscard(
             const external = target.externalDirectory
             if (external) yield* assertPermission(LocationMutation.externalDirectoryPermission(external))
             yield* assertPermission({ action: "edit", resources: [target.resource], save: ["*"] })
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            if (runtime) {
+              const containerTarget = DockerRuntime.containerPath(runtime, target.canonical)
+              const existed = (yield* DockerFiles.stat(runtime, containerTarget)) === "file"
+              yield* DockerFiles.writeBytes(runtime, containerTarget, parameters.content)
+              return {
+                operation: "write" as const,
+                target: containerTarget,
+                resource: target.resource,
+                existed,
+              }
+            }
             return yield* files.writeTextPreservingBom({ target, content: parameters.content })
           }).pipe(
             Effect.catchCause((cause) =>

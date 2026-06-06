@@ -78,6 +78,7 @@ import { useQueries } from "@tanstack/solid-query"
 import { useQueryOptions } from "@/context/server-sync"
 import { pathKey } from "@/utils/path-key"
 import { base64Encode } from "@opencode-ai/core/util/encode"
+import { getFilename } from "@opencode-ai/core/util/path"
 import { displayName } from "@/pages/layout/helpers"
 
 interface PromptInputProps {
@@ -85,6 +86,7 @@ interface PromptInputProps {
   variant?: "dock" | "new-session"
   ref?: (el: HTMLDivElement) => void
   newSessionWorktree?: string
+  onNewSessionWorktreeChange?: (value: string) => void
   onNewSessionWorktreeReset?: () => void
   edit?: { id: string; prompt: Prompt; context: FollowupDraft["context"] }
   onEditLoaded?: () => void
@@ -1122,6 +1124,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   )
 
   const variants = createMemo(() => ["default", ...local.model.variant.list()])
+  const sessionLocations = createMemo(() => ["docker", "main", ...(sync.project?.sandboxes ?? []), "create"])
+  const sessionLocationLabel = (value: string) => {
+    if (value === "main") return "Main workspace"
+    if (value === "docker") return "Docker container"
+    if (value === "create") return "Create worktree"
+    return getFilename(value)
+  }
   // Check provider variants directly: `variants` also includes the UI-only default option.
   const showVariantControl = createMemo(() => local.model.variant.list().length > 0)
   const accepting = createMemo(() => {
@@ -1592,6 +1601,24 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   </Show>
                   <Show when={newSession() && !selectedProject()}>
                     <ComposerPickerTrigger state={newProjectTriggerState()} />
+                  </Show>
+                  <Show when={newSession() && props.onNewSessionWorktreeChange}>
+                    <Select
+                      size="normal"
+                      options={sessionLocations()}
+                      current={props.newSessionWorktree ?? "docker"}
+                      label={sessionLocationLabel}
+                      onSelect={(value) => {
+                        if (!value) return
+                        props.onNewSessionWorktreeChange?.(value)
+                        restoreFocus()
+                      }}
+                      class="max-w-[180px] justify-start text-v2-text-text-faint"
+                      valueClass="truncate text-[13px] font-[440] leading-5 text-v2-text-text-faint"
+                      triggerStyle={control()}
+                      triggerProps={{ "data-action": "prompt-session-location" }}
+                      variant="ghost"
+                    />
                   </Show>
                   <ComposerModelControl state={modelControlState()} />
                   <Show when={store.mode !== "shell" && showVariantControl()}>

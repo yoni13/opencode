@@ -37,6 +37,10 @@ import {
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
+import { Workspace } from "@/control-plane/workspace"
+import * as InstanceState from "@/effect/instance-state"
+import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -58,6 +62,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
+    const workspace = yield* Workspace.Service
+    const instances = yield* InstanceStore.Service
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
@@ -151,7 +157,30 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
-      return yield* shareSvc.create(ctx.payload)
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const currentWorkspace = yield* InstanceState.workspaceID
+      const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
+      if (currentWorkspace || ctx.payload?.workspaceID || url.searchParams.get("workspace") === "main") {
+        return yield* shareSvc.create(ctx.payload)
+      }
+
+      const instance = yield* InstanceState.context
+      const created = yield* workspace
+        .create({
+          type: "docker",
+          branch: null,
+          projectID: instance.project.id,
+        })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      const target = yield* instances.load({
+        directory: created.directory ?? instance.directory,
+        worktree: instance.worktree,
+        project: instance.project,
+      })
+      return yield* shareSvc.create(ctx.payload).pipe(
+        Effect.provideService(InstanceRef, target),
+        Effect.provideService(WorkspaceRef, created.id),
+      )
     })
 
     const createRaw = Effect.fn("SessionHttpApi.createRaw")(function* (ctx: {

@@ -385,7 +385,7 @@ export default function Page() {
     messageId: undefined as string | undefined,
     mobileTab: "session" as "session" | "changes",
     changes: "git" as ChangeMode,
-    newSessionWorktree: "main",
+    newSessionWorktree: "docker",
     deferRender: false,
   })
 
@@ -499,6 +499,7 @@ export default function Page() {
 
   const newSessionWorktree = createMemo(() => {
     if (store.newSessionWorktree === "create") return "create"
+    if (store.newSessionWorktree === "docker") return "docker"
     const project = sync.project
     if (project && sdk.directory !== project.worktree) return sdk.directory
     return "main"
@@ -733,7 +734,7 @@ export default function Page() {
       () => params.dir,
       (dir) => {
         if (!dir) return
-        setStore("newSessionWorktree", "main")
+        setStore("newSessionWorktree", "docker")
       },
       { defer: true },
     ),
@@ -1665,7 +1666,8 @@ export default function Page() {
         inputRef = el
       }}
       newSessionWorktree={newSessionWorktree()}
-      onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
+      onNewSessionWorktreeChange={(value) => setStore("newSessionWorktree", value)}
+      onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "docker")}
       onSubmit={() => {
         comments.clear()
         resumeScroll()

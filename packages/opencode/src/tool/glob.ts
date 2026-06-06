@@ -3,6 +3,8 @@ import { Effect, Option, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
 import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./glob.txt"
@@ -22,6 +24,7 @@ export const GlobTool = Tool.define(
     const rg = yield* Ripgrep.Service
     const fs = yield* FSUtil.Service
     const reference = yield* Reference.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     return {
       description: DESCRIPTION,
@@ -52,6 +55,34 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+          if (runtime) {
+            const containerSearch = DockerRuntime.containerPath(runtime, search)
+            const pattern = DockerFiles.globToRegExp(params.pattern)
+            const items = (yield* DockerFiles.files(runtime, containerSearch)).filter((file) => pattern.test(file))
+            const truncated = items.length > limit
+            const files = items.slice(0, limit).map((file) => path.posix.join(containerSearch, file))
+            const output = []
+            if (files.length === 0) output.push("No files found")
+            if (files.length > 0) {
+              output.push(...files)
+              if (truncated) {
+                output.push("")
+                output.push(
+                  `(Results are truncated: showing first ${limit} results. Consider using a more specific path or pattern.)`,
+                )
+              }
+            }
+            return {
+              title: path.relative(ins.worktree, search),
+              metadata: {
+                count: files.length,
+                truncated,
+              },
+              output: output.join("\n"),
+            }
+          }
           let truncated = false
           const files = yield* rg.files({ cwd: search, glob: [params.pattern], signal: ctx.abort }).pipe(
             Stream.mapEffect((file) =>

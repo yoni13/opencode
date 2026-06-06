@@ -26,6 +26,7 @@ export function SessionComposerRegion(props: {
   placement?: "dock" | "inline"
   inputRef: (el: HTMLDivElement) => void
   newSessionWorktree: string
+  onNewSessionWorktreeChange: (value: string) => void
   onNewSessionWorktreeReset: () => void
   onSubmit: () => void
   onResponseSubmit: () => void
@@ -266,6 +267,7 @@ export function SessionComposerRegion(props: {
                       variant={props.placement === "inline" ? "new-session" : undefined}
                       ref={props.inputRef}
                       newSessionWorktree={props.newSessionWorktree}
+                      onNewSessionWorktreeChange={props.onNewSessionWorktreeChange}
                       onNewSessionWorktreeReset={props.onNewSessionWorktreeReset}
                       edit={props.followup?.edit}
                       onEditLoaded={props.followup?.onEditLoaded}

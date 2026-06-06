@@ -3,6 +3,8 @@ import { NonNegativeInt } from "@opencode-ai/core/schema"
 import * as path from "path"
 import * as Tool from "./tool"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
@@ -74,6 +76,7 @@ export const ReadTool = Tool.define<
     const lsp = yield* LSP.Service
     const reference = yield* Reference.Service
     const scope = yield* Scope.Scope
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
       const dir = path.dirname(filepath)
@@ -263,6 +266,86 @@ export const ReadTool = Tool.define<
       })
 
       if (!stat) return yield* miss(filepath)
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      if (runtime) {
+        const containerFilepath = DockerRuntime.containerPath(runtime, filepath)
+        const kind = yield* DockerFiles.stat(runtime, containerFilepath)
+        if (kind === "directory") {
+          const entries = (yield* DockerFiles.list(runtime, containerFilepath)).map((item) =>
+            item.type === "directory" ? `${item.name}/` : item.name,
+          )
+          const limit = params.limit ?? DEFAULT_READ_LIMIT
+          const offset = params.offset || 1
+          const start = offset - 1
+          const sliced = entries.slice(start, start + limit)
+          const truncated = start + sliced.length < entries.length
+          return {
+            title,
+            output: [
+              `<path>${containerFilepath}</path>`,
+              `<type>directory</type>`,
+              `<entries>`,
+              sliced.join("\n"),
+              truncated
+                ? `\n(Showing ${sliced.length} of ${entries.length} entries. Use 'offset' parameter to read beyond entry ${offset + sliced.length})`
+                : `\n(${entries.length} entries)`,
+              `</entries>`,
+            ].join("\n"),
+            metadata: {
+              preview: sliced.slice(0, 20).join("\n"),
+              truncated,
+              loaded: [] as string[],
+              display: {
+                type: "directory" as const,
+                path: containerFilepath,
+                entries: sliced,
+                offset,
+                totalEntries: entries.length,
+                truncated,
+              },
+            },
+          }
+        }
+        if (kind !== "file") return yield* miss(filepath)
+        const content = new TextDecoder("utf-8", { fatal: false }).decode(
+          yield* DockerFiles.readBytes(runtime, containerFilepath),
+        )
+        const lines = content.split(/\r?\n/)
+        const offset = params.offset || 1
+        const limit = params.limit ?? DEFAULT_READ_LIMIT
+        const raw = lines.slice(offset - 1, offset - 1 + limit)
+        const last = offset + raw.length - 1
+        const next = last + 1
+        const truncated = next <= lines.length
+        const output = [
+          `<path>${containerFilepath}</path>`,
+          `<type>file</type>`,
+          "<content>\n",
+          raw.map((line, i) => `${i + offset}: ${line}`).join("\n"),
+          truncated
+            ? `\n\n(Showing lines ${offset}-${last} of ${lines.length}. Use offset=${next} to continue.)`
+            : `\n\n(End of file - total ${lines.length} lines)`,
+          "\n</content>",
+        ].join("\n")
+        return {
+          title,
+          output,
+          metadata: {
+            preview: raw.slice(0, 20).join("\n"),
+            truncated,
+            loaded: [] as string[],
+            display: {
+              type: "file" as const,
+              path: containerFilepath,
+              text: raw.join("\n"),
+              lineStart: offset,
+              lineEnd: last,
+              totalLines: lines.length,
+              truncated,
+            },
+          },
+        }
+      }
 
       if (stat.type === "Directory") {
         const items = yield* list(filepath)

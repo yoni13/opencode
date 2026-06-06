@@ -2,9 +2,13 @@ export * as GlobTool from "./glob"
 
 import { Tool, ToolFailure, toolText } from "@opencode-ai/llm"
 import { Cause, Effect, Layer, Schema } from "effect"
+import { DockerRuntime } from "../docker-runtime"
 import { FileSystem } from "../filesystem"
+import { Location } from "../location"
 import { LocationSearch } from "../location-search"
+import { RelativePath } from "../schema"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "glob"
 
@@ -55,6 +59,9 @@ export const layer = Layer.effectDiscard(
     const registry = yield* ToolRegistry.Service
     const filesystem = yield* FileSystem.Service
     const search = yield* LocationSearch.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -73,6 +80,31 @@ export const layer = Layer.effectDiscard(
                 limit: parameters.limit,
               },
             })
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            if (runtime) {
+              const directory = DockerFiles.resolvePath(runtime, currentLocation!.directory, parameters.path ?? ".")
+              const pattern = DockerFiles.globToRegExp(parameters.pattern)
+              const limit = parameters.limit ?? LocationSearch.DEFAULT_RESULT_LIMIT
+              const items = (yield* DockerFiles.files(runtime, directory))
+                .filter((file) => pattern.test(file))
+                .slice(0, limit + 1)
+              return new LocationSearch.FilesResult({
+                items: items.slice(0, limit).map(
+                  (resource) =>
+                    new LocationSearch.File({
+                      path: RelativePath.make(resource),
+                      canonical: `${directory}/${resource}`,
+                      resource,
+                      mtime: 0,
+                    }),
+                ),
+                truncated: items.length > limit,
+                partial: false,
+              })
+            }
             return yield* search.files(parameters)
           }).pipe(
             Effect.catchCause((cause) =>

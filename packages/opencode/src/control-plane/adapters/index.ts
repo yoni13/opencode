@@ -1,8 +1,10 @@
 import type { ProjectV2 } from "@opencode-ai/core/project"
 import type { WorkspaceAdapter, WorkspaceAdapterEntry } from "../types"
+import { DockerAdapter } from "./docker"
 import { WorktreeAdapter } from "./worktree"
 
 const BUILTIN: Record<string, WorkspaceAdapter> = {
+  docker: DockerAdapter,
   worktree: WorktreeAdapter,
 }
 

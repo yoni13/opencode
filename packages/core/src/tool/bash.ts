@@ -8,6 +8,8 @@ import { Config } from "../config"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
+import { DockerRuntime } from "../docker-runtime"
+import { Location } from "../location"
 import { PositiveInt } from "../schema"
 import { ToolOutputStore } from "../tool-output-store"
 import { ToolRegistry } from "./registry"
@@ -118,6 +120,9 @@ export const layer = Layer.effectDiscard(
     const appProcess = yield* AppProcess.Service
     const resources = yield* ToolOutputStore.Service
     const config = yield* Config.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -141,25 +146,40 @@ export const layer = Layer.effectDiscard(
             const shell =
               Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : []))).shell ??
               defaultShell()
-            const command = ChildProcess.make(parameters.command, [], {
-              cwd: target.canonical,
-              shell,
-              stdin: "ignore",
-              detached: process.platform !== "win32",
-              forceKillAfter: Duration.seconds(3),
-            })
             const timeout = parameters.timeout ?? DEFAULT_TIMEOUT_MS
-            const result = yield* appProcess
-              .run(command, {
-                timeout: Duration.millis(timeout),
-                maxOutputBytes: MAX_CAPTURE_BYTES,
-                maxErrorBytes: MAX_CAPTURE_BYTES,
-              })
-              .pipe(
-                Effect.catchTag("AppProcessError", (error) =>
-                  isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
-                ),
-              )
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            const result = runtime
+              ? yield* DockerRuntime.run({
+                  runtime,
+                  command: [shell, "-lc", parameters.command],
+                  cwd: target.canonical,
+                  timeout,
+                  maxOutputBytes: MAX_CAPTURE_BYTES,
+                  maxErrorBytes: MAX_CAPTURE_BYTES,
+                })
+              : yield* appProcess
+                  .run(
+                    ChildProcess.make(parameters.command, [], {
+                      cwd: target.canonical,
+                      shell,
+                      stdin: "ignore",
+                      detached: process.platform !== "win32",
+                      forceKillAfter: Duration.seconds(3),
+                    }),
+                    {
+                      timeout: Duration.millis(timeout),
+                      maxOutputBytes: MAX_CAPTURE_BYTES,
+                      maxErrorBytes: MAX_CAPTURE_BYTES,
+                    },
+                  )
+                  .pipe(
+                    Effect.catchTag("AppProcessError", (error) =>
+                      isTimeout(error) ? Effect.succeed(undefined) : Effect.fail(error),
+                    ),
+                  )
             if (!result) {
               return {
                 command: parameters.command,

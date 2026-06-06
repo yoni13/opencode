@@ -2,10 +2,14 @@ export * as GrepTool from "./grep"
 
 import { Tool, ToolFailure, toolText } from "@opencode-ai/llm"
 import { Cause, Effect, Layer, Schema } from "effect"
+import { DockerRuntime } from "../docker-runtime"
 import { FileSystem } from "../filesystem"
+import { Location } from "../location"
 import { LocationSearch } from "../location-search"
 import { Ripgrep } from "../ripgrep"
+import { RelativePath } from "../schema"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "grep"
 
@@ -70,6 +74,9 @@ export const layer = Layer.effectDiscard(
     const registry = yield* ToolRegistry.Service
     const filesystem = yield* FileSystem.Service
     const search = yield* LocationSearch.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -89,6 +96,63 @@ export const layer = Layer.effectDiscard(
                 limit: parameters.limit,
               },
             })
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
+            if (runtime) {
+              const directory = DockerFiles.resolvePath(runtime, currentLocation!.directory, parameters.path ?? ".")
+              const limit = parameters.limit ?? LocationSearch.DEFAULT_RESULT_LIMIT
+              const result = yield* DockerRuntime.run({
+                runtime,
+                command: [
+                  "grep",
+                  "-RInE",
+                  "--exclude-dir=.git",
+                  ...(parameters.include ? [`--include=${parameters.include}`] : []),
+                  "--",
+                  parameters.pattern,
+                  ".",
+                ],
+                cwd: directory,
+                maxOutputBytes: 1024 * 1024,
+                maxErrorBytes: 8 * 1024,
+              })
+              if (result.exitCode !== 0 && result.exitCode !== 1) {
+                return yield* Effect.die(new Error(result.stderr.toString("utf8") || "grep failed"))
+              }
+              const rows = result.stdout
+                .toString("utf8")
+                .split("\n")
+                .filter(Boolean)
+                .slice(0, limit + 1)
+              return new LocationSearch.GrepResult({
+                items: rows.slice(0, limit).flatMap((row) => {
+                  const first = row.indexOf(":")
+                  const second = first === -1 ? -1 : row.indexOf(":", first + 1)
+                  if (first === -1 || second === -1) return []
+                  const resource = row.slice(0, first).replace(/^\.\//, "")
+                  const line = Number.parseInt(row.slice(first + 1, second), 10)
+                  if (!Number.isSafeInteger(line) || line < 1) return []
+                  const lines = row.slice(second + 1)
+                  return [
+                    new LocationSearch.Match({
+                      path: RelativePath.make(resource),
+                      canonical: `${directory}/${resource}`,
+                      resource,
+                      lines: lines.slice(0, LocationSearch.MAX_LINE_PREVIEW_LENGTH),
+                      linePreviewTruncated: lines.length > LocationSearch.MAX_LINE_PREVIEW_LENGTH,
+                      line,
+                      offset: 0,
+                      submatches: [],
+                      mtime: 0,
+                    }),
+                  ]
+                }),
+                truncated: rows.length > limit,
+                partial: result.stdoutTruncated,
+              })
+            }
             return yield* search.grep(parameters)
           }).pipe(
             Effect.catchCause((cause) => {

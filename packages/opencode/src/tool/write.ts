@@ -10,6 +10,8 @@ import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { DockerFiles } from "@opencode-ai/core/docker-files"
 import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
@@ -31,6 +33,7 @@ export const WriteTool = Tool.define(
     const fs = yield* FSUtil.Service
     const events = yield* EventV2Bridge.Service
     const format = yield* Format.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     return {
       description: DESCRIPTION,
@@ -61,17 +64,40 @@ export const WriteTool = Tool.define(
             },
           })
 
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+          if (runtime) {
+            yield* DockerFiles.writeBytes(
+              runtime,
+              DockerRuntime.containerPath(runtime, filepath),
+              Bom.join(contentNew, desiredBom),
+            )
+          } else {
+            yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
+          }
+          if (!runtime && (yield* format.file(filepath))) {
             yield* Bom.syncFile(fs, filepath, desiredBom)
           }
-          yield* events.publish(FileSystem.Event.Edited, { file: filepath })
-          yield* events.publish(Watcher.Event.Updated, {
-            file: filepath,
-            event: exists ? "change" : "add",
-          })
+          if (!runtime) {
+            yield* events.publish(FileSystem.Event.Edited, { file: filepath })
+            yield* events.publish(Watcher.Event.Updated, {
+              file: filepath,
+              event: exists ? "change" : "add",
+            })
+          }
 
           let output = "Wrote file successfully."
+          if (runtime) {
+            return {
+              title: path.relative(instance.worktree, filepath),
+              metadata: {
+                diagnostics: {},
+                filepath: DockerRuntime.containerPath(runtime, filepath),
+                exists,
+              },
+              output,
+            }
+          }
           yield* lsp.touchFile(filepath, "document")
           const diagnostics = yield* lsp.diagnostics()
           const normalizedFilepath = FSUtil.normalizePath(filepath)

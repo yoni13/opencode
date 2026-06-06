@@ -20,6 +20,7 @@ import { NamedError } from "@opencode-ai/core/util/error"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { withTimeout } from "@/util/timeout"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { McpOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
@@ -280,6 +281,7 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const auth = yield* McpAuth.Service
     const events = yield* EventV2Bridge.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
@@ -426,15 +428,32 @@ export const layer = Layer.effect(
     ) {
       const [cmd, ...args] = mcp.command
       const cwd = yield* InstanceState.directory
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      const environment = {
+        ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+        ...mcp.environment,
+      }
       const transport = new StdioClientTransport({
         stderr: "pipe",
-        command: cmd,
-        args,
-        cwd,
+        command: runtime ? "docker" : cmd,
+        args: runtime
+          ? [
+              "exec",
+              "-i",
+              "-w",
+              DockerRuntime.containerPath(runtime, cwd),
+              ...Object.entries(environment).flatMap(([key, value]) =>
+                value === undefined ? [] : ["-e", `${key}=${value}`],
+              ),
+              runtime.container,
+              cmd,
+              ...args,
+            ]
+          : args,
+        cwd: runtime ? runtime.hostDirectory : cwd,
         env: {
           ...process.env,
-          ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
-          ...mcp.environment,
+          ...environment,
         },
       })
       transport.stderr?.on("data", (chunk: Buffer) => {
@@ -977,6 +996,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Config.defaultLayer),
   Layer.provide(CrossSpawnSpawner.defaultLayer),
   Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(DockerRuntime.defaultLayer),
 )
 
 export * as MCP from "."

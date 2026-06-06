@@ -2,11 +2,14 @@ export * as ApplyPatchTool from "./apply-patch"
 
 import { Tool, ToolFailure, toolText } from "@opencode-ai/llm"
 import { Cause, Effect, Layer, Schema } from "effect"
+import { DockerRuntime } from "../docker-runtime"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
+import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { Patch } from "../patch"
 import { ToolRegistry } from "./registry"
+import { DockerFiles } from "../docker-files"
 
 export const name = "apply_patch"
 
@@ -55,6 +58,9 @@ export const layer = Layer.effectDiscard(
     const mutation = yield* LocationMutation.Service
     const files = yield* FileMutation.Service
     const fs = yield* FSUtil.Service
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+    const currentLocation = location._tag === "Some" ? location.value : undefined
 
     yield* registry.contribute((editor) =>
       editor.set(name, {
@@ -94,21 +100,33 @@ export const layer = Layer.effectDiscard(
               resources: [...new Set(targets.map(({ target }) => target.resource))],
               save: ["*"],
             })
+            const runtime =
+              docker._tag === "Some" && currentLocation
+                ? yield* docker.value.resolve(currentLocation.workspaceID)
+                : undefined
 
             const prepared: Prepared[] = []
             for (const { hunk, target } of targets) {
               yield* Effect.gen(function* () {
+                const containerTarget = runtime ? DockerRuntime.containerPath(runtime, target.canonical) : undefined
                 if (hunk.type === "add") {
                   prepared.push({ ...hunk, target })
                   return
                 }
-                if ((yield* fs.stat(target.canonical)).type !== "File")
+                if (runtime && containerTarget) {
+                  if ((yield* DockerFiles.stat(runtime, containerTarget)) !== "file")
+                    yield* fail(hunk.path, new Error("Target file does not exist"))
+                } else if ((yield* fs.stat(target.canonical)).type !== "File") {
                   yield* fail(hunk.path, new Error("Target file does not exist"))
+                }
                 if (hunk.type === "delete") {
                   prepared.push({ ...hunk, target })
                   return
                 }
-                const source = yield* fs.readFile(target.canonical)
+                const source =
+                  runtime && containerTarget
+                    ? yield* DockerFiles.readBytes(runtime, containerTarget)
+                    : yield* fs.readFile(target.canonical)
                 const update = Patch.derive(
                   hunk.path,
                   hunk.chunks,
@@ -127,6 +145,28 @@ export const layer = Layer.effectDiscard(
               prepared,
               (change) =>
                 Effect.gen(function* () {
+                  const containerTarget = runtime
+                    ? DockerRuntime.containerPath(runtime, change.target.canonical)
+                    : undefined
+                  if (runtime && containerTarget) {
+                    if (change.type === "add") {
+                      const content =
+                        change.contents.endsWith("\n") || change.contents === ""
+                          ? change.contents
+                          : `${change.contents}\n`
+                      yield* DockerFiles.writeBytes(runtime, containerTarget, content)
+                      applied.push({ type: change.type, resource: change.target.resource, target: containerTarget })
+                      return
+                    }
+                    if (change.type === "delete") {
+                      yield* DockerFiles.remove(runtime, containerTarget)
+                      applied.push({ type: change.type, resource: change.target.resource, target: containerTarget })
+                      return
+                    }
+                    yield* DockerFiles.writeBytes(runtime, containerTarget, change.content)
+                    applied.push({ type: change.type, resource: change.target.resource, target: containerTarget })
+                    return
+                  }
                   if (change.type === "add") {
                     const result = yield* files.create({
                       target: change.target,

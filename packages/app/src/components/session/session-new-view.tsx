@@ -8,6 +8,7 @@ import { Mark } from "@opencode-ai/ui/logo"
 import { getDirectory, getFilename } from "@opencode-ai/core/util/path"
 
 const MAIN_WORKTREE = "main"
+const DOCKER_WORKSPACE = "docker"
 const CREATE_WORKTREE = "create"
 const ROOT_CLASS = "size-full flex flex-col"
 
@@ -21,11 +22,11 @@ export function NewSessionView(props: NewSessionViewProps) {
   const language = useLanguage()
 
   const sandboxes = createMemo(() => sync.project?.sandboxes ?? [])
-  const options = createMemo(() => [MAIN_WORKTREE, ...sandboxes(), CREATE_WORKTREE])
+  const options = createMemo(() => [DOCKER_WORKSPACE, MAIN_WORKTREE, ...sandboxes(), CREATE_WORKTREE])
   const current = createMemo(() => {
     const selection = props.worktree
     if (options().includes(selection)) return selection
-    return MAIN_WORKTREE
+    return DOCKER_WORKSPACE
   })
   const projectRoot = createMemo(() => sync.project?.worktree ?? sdk.directory)
   const isWorktree = createMemo(() => {
@@ -41,6 +42,8 @@ export function NewSessionView(props: NewSessionViewProps) {
       if (branch) return language.t("session.new.worktree.mainWithBranch", { branch })
       return language.t("session.new.worktree.main")
     }
+
+    if (value === DOCKER_WORKSPACE) return "Docker container"
 
     if (value === CREATE_WORKTREE) return language.t("session.new.worktree.create")
 
