@@ -1967,6 +1967,40 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
+  "materializes text uploads in the workspace root",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const fs = yield* FSUtil.Service
+
+      const msg = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "file",
+            mime: "text/plain",
+            url: "data:text/plain;base64,aGVsbG8gdXBsb2Fk",
+            filename: "note.txt",
+          },
+        ],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+      expect(yield* fs.readFileString(path.join(dir, "note.txt"))).toBe("hello upload")
+      expect(msg.parts.some((part) => part.type === "text" && part.synthetic && part.text.includes("note.txt"))).toBe(true)
+      expect(msg.parts.some((part) => part.type === "text" && part.synthetic && part.text === "hello upload")).toBe(true)
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "keeps stored part order stable when file resolution is async",
   () =>
     Effect.gen(function* () {

@@ -912,8 +912,10 @@ export const layer = Layer.effect(
           const url = new URL(part.url)
           switch (url.protocol) {
             case "data:":
+              const materialized = yield* materializeUpload(part)
               if (part.mime === "text/plain") {
                 return [
+                  materialized,
                   {
                     messageID: info.id,
                     sessionID: input.sessionID,
@@ -931,7 +933,6 @@ export const layer = Layer.effect(
                   { ...part, messageID: info.id, sessionID: input.sessionID },
                 ]
               }
-              const materialized = yield* materializeUpload(part)
               if (!modelSupportsFilePart(part.mime, selectedModel)) return [materialized]
               return [materialized, { ...part, messageID: info.id, sessionID: input.sessionID }]
               break
