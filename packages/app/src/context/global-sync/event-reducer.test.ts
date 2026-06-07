@@ -223,6 +223,21 @@ describe("applyDirectoryEvent", () => {
     expect(store.session_status.ses_1).toBeUndefined()
   })
 
+  test("clears stale session status on session.idle", () => {
+    const [store, setStore] = createStore(baseState({ session_status: { ses_1: { type: "busy" } } }))
+
+    applyDirectoryEvent({
+      event: { type: "session.idle", properties: { sessionID: "ses_1" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.session_status.ses_1).toBeUndefined()
+  })
+
   test("cleans session caches when deleted and decrements only root totals", () => {
     const cases = [
       { info: rootSession({ id: "ses_1" }), expectedTotal: 1 },

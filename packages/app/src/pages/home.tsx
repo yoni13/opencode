@@ -46,6 +46,7 @@ import { useSettings } from "@/context/settings"
 import { ServerRowMenu } from "@/components/server/server-row-menu"
 import { ServerHealthIndicator } from "@/components/server/server-row"
 import { type ServerHealth } from "@/utils/server-health"
+import { decode64 } from "@/utils/base64"
 
 const HOME_SESSION_LIMIT = 64
 const HOME_ROW_LAYOUT =
@@ -78,6 +79,10 @@ const HOME_SEARCH_RESULT_META =
 
 let pendingHomeNavigation: { server: ServerConnection.Key; href: string } | undefined
 
+function uniqueDirectories(directories: string[]) {
+  return [...new Map(directories.map((directory) => [pathKey(directory), directory] as const)).values()]
+}
+
 function buildHomeSessionRecords(input: {
   sync: Pick<ReturnType<typeof useServerSync>, "child">
   projectDirectories: () => string[]
@@ -94,8 +99,11 @@ function buildHomeSessionRecords(input: {
   ]
     .sort((a, b) => (b.time.updated ?? b.time.created) - (a.time.updated ?? a.time.created))
     .flatMap((session) => {
-      const project = projectForSession(session, input.projects(), input.projectByID())
-      if (!project) return []
+      const project = projectForSession(session, input.projects(), input.projectByID()) ?? {
+        worktree: session.directory,
+        expanded: true,
+        id: session.projectID,
+      }
       return {
         session,
         project,
@@ -132,6 +140,7 @@ function HomeDesign() {
   const global = useGlobal()
   const command = useCommand()
   const notification = useNotification()
+  const tabs = useTabs()
   let focusSessionSearch: (() => void) | undefined
   const [state, setState] = createStore({
     search: "",
@@ -157,10 +166,20 @@ function HomeDesign() {
       projects()[0],
   )
   const directories = (project: LocalProject) => [project.worktree, ...(project.sandboxes ?? [])]
+  const openTabDirectories = createMemo(() =>
+    uniqueDirectories(
+      tabs.store
+        .filter((tab) => tab.server === state.selection.server)
+        .flatMap((tab) => {
+          const directory = decode64(tab.dirBase64)
+          return directory ? [directory] : []
+        }),
+    ),
+  )
   const projectDirectories = createMemo(() => {
     const project = selectedProject()
-    if (!project) return projects().flatMap(directories)
-    return directories(project)
+    if (!project) return uniqueDirectories([...projects().flatMap(directories), ...openTabDirectories()])
+    return uniqueDirectories([...directories(project), ...openTabDirectories()])
   })
   const search = createMemo(() => state.search.trim())
   const sessionLoad = useQuery(() => ({
