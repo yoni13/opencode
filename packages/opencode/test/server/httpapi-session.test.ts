@@ -2,7 +2,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { mkdir } from "node:fs/promises"
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { Cause, Config, Effect, Exit, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
@@ -260,6 +260,53 @@ describe("session HttpApi", () => {
         })
       }
     }),
+  )
+
+  it.instance(
+    "uploads files without overwriting existing files",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "upload collision" })
+        const headers = { "x-opencode-directory": test.directory, "content-type": "text/plain" }
+
+        yield* Effect.promise(() => writeFile(path.join(test.directory, "report.txt"), "existing"))
+        const response = yield* request(`/session/${session.id}/upload?path=report.txt`, {
+          method: "POST",
+          headers,
+          body: "uploaded",
+        })
+
+        const body = (yield* response.json) as { path: string; url: string; mime: string; size: number }
+        expect(response.status).toBe(200)
+        expect(body).toMatchObject({ path: "report (1).txt", mime: "text/plain", size: 8 })
+        expect(yield* Effect.promise(() => readFile(path.join(test.directory, "report.txt"), "utf8"))).toBe("existing")
+        expect(yield* Effect.promise(() => readFile(path.join(test.directory, "report (1).txt"), "utf8"))).toBe(
+          "uploaded",
+        )
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "rejects upload paths with symlink parents",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "upload symlink" })
+        const outside = yield* tmpdirScoped()
+        yield* Effect.promise(() => symlink(outside, path.join(test.directory, "alias"), "dir"))
+
+        const response = yield* request(`/session/${session.id}/upload?path=alias/report.txt`, {
+          method: "POST",
+          headers: { "x-opencode-directory": test.directory, "content-type": "text/plain" },
+        })
+
+        const body = (yield* response.json) as { error: string }
+        expect(response.status).toBe(400)
+        expect(body.error).toContain("symlink")
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
   )
 
   it.instance(

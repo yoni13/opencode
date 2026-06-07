@@ -1,4 +1,4 @@
-import { Config as EffectConfig, Context, Effect, Layer } from "effect"
+import { Cause, Config as EffectConfig, Context, Effect, Layer, Stream } from "effect"
 import { HttpApiBuilder, OpenApi } from "effect/unstable/httpapi"
 import {
   FetchHttpClient,
@@ -6,10 +6,17 @@ import {
   HttpMiddleware,
   HttpRouter,
   HttpServer,
+  HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { createWriteStream } from "node:fs"
+import { link, lstat, mkdir, realpath, rm, stat } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import path from "node:path"
+import { Writable } from "node:stream"
+import { pathToFileURL } from "node:url"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
@@ -46,6 +53,7 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
+import { SessionID } from "@/session/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
@@ -175,6 +183,194 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+function uploadError(message: string, status = 400) {
+  return HttpServerResponse.jsonUnsafe({ error: message }, { status })
+}
+
+function uploadRelativePath(value: string | null) {
+  const input = value?.trim()
+  if (!input) return
+  const relative = path.posix.normalize(input.replaceAll("\\", "/"))
+  if (relative === "." || relative === ".." || relative.startsWith("../") || path.posix.isAbsolute(relative)) return
+  return relative
+}
+
+function uploadCandidate(filepath: string, index: number) {
+  if (index === 0) return filepath
+  const parsed = path.parse(filepath)
+  return path.join(parsed.dir, `${parsed.name} (${index})${parsed.ext}`)
+}
+
+function uploadRelativeFromFile(ctxDirectory: string, filepath: string) {
+  return path.relative(ctxDirectory, filepath).split(path.sep).join("/")
+}
+
+async function pathExists(filepath: string) {
+  return lstat(filepath)
+    .then(() => true)
+    .catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+      throw error
+    })
+}
+
+async function ensureSafeUploadParent(root: string, parent: string) {
+  const rootReal = await realpath(root)
+  if (!FSUtil.contains(root, parent)) throw new Error("Path escapes the workspace")
+  const relative = path.relative(root, parent)
+  let current = root
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part)
+    const info = await lstat(current).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return
+      throw error
+    })
+    if (!info) break
+    if (info.isSymbolicLink()) throw new Error("Upload path contains a symlink")
+    if (!info.isDirectory()) throw new Error("Upload parent path is not a directory")
+  }
+  await mkdir(parent, { recursive: true })
+  const parentReal = await realpath(parent)
+  if (!FSUtil.contains(rootReal, parentReal)) throw new Error("Path escapes the workspace")
+}
+
+async function reserveUploadedFile(tmp: string, requested: string) {
+  for (let index = 0; index <= 999; index++) {
+    const candidate = uploadCandidate(requested, index)
+    if (await pathExists(candidate)) continue
+    try {
+      await link(tmp, candidate)
+      await rm(tmp, { force: true }).catch(() => undefined)
+      return candidate
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue
+      throw error
+    }
+  }
+  const fallback = uploadCandidate(requested, Date.now())
+  await link(tmp, fallback)
+  await rm(tmp, { force: true }).catch(() => undefined)
+  return fallback
+}
+
+function writeChunk(sink: ReturnType<typeof createWriteStream>, chunk: Uint8Array) {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const onDrain = () => {
+      cleanup()
+      resolve()
+    }
+    const cleanup = () => {
+      sink.off("error", onError)
+      sink.off("drain", onDrain)
+    }
+    sink.once("error", onError)
+    if (sink.write(chunk)) {
+      cleanup()
+      resolve()
+      return
+    }
+    sink.once("drain", onDrain)
+  })
+}
+
+function finishWrite(sink: ReturnType<typeof createWriteStream>) {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    const cleanup = () => {
+      sink.off("error", onError)
+    }
+    sink.once("error", onError)
+    sink.end(() => {
+      cleanup()
+      resolve()
+    })
+  })
+}
+
+function streamRequestToFile(request: HttpServerRequest.HttpServerRequest, filepath: string) {
+  return Effect.tryPromise({
+    try: async () => {
+      if (request.source instanceof Request && request.source.body) {
+        await request.source.body.pipeTo(Writable.toWeb(createWriteStream(filepath)))
+        return (await stat(filepath)).size
+      }
+      const sink = createWriteStream(filepath)
+      await Effect.runPromise(request.stream.pipe(Stream.runForEach((chunk) => Effect.promise(() => writeChunk(sink, chunk)))))
+      await finishWrite(sink)
+      return (await stat(filepath)).size
+    },
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  })
+}
+
+const sessionUploadRoute = HttpRouter.use((router) =>
+  router.add("POST", "/session/:sessionID/upload", (request) =>
+    Effect.gen(function* () {
+      const params = yield* HttpRouter.params
+      const sessionID = params.sessionID
+      if (!sessionID) return uploadError("Missing session ID")
+      const url = new URL(request.url, "http://localhost")
+      const relative = uploadRelativePath(url.searchParams.get("path"))
+      if (!relative) return uploadError("Invalid upload path")
+
+      const info = yield* Session.Service.use((svc) => svc.get(SessionID.make(sessionID))).pipe(
+        Effect.catch(() => Effect.fail(new Error("Session not found"))),
+      )
+      const filepath = path.resolve(info.directory, relative)
+      if (!FSUtil.contains(info.directory, filepath)) return uploadError("Path escapes the workspace")
+      const parent = path.dirname(filepath)
+      const parentError = yield* Effect.promise(() =>
+        ensureSafeUploadParent(info.directory, parent)
+          .then(() => undefined)
+          .catch((error) => (error instanceof Error ? error.message : "Invalid upload path")),
+      )
+      if (parentError) return uploadError(parentError)
+
+      const tmp = path.join(parent, `.opencode-upload-${randomUUID()}.tmp`)
+      const size = yield* streamRequestToFile(request, tmp).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => rm(tmp, { force: true })).pipe(Effect.ignore)
+            return yield* Effect.fail(error)
+          }),
+        ),
+      )
+      const uploaded = yield* Effect.tryPromise({
+        try: () => reserveUploadedFile(tmp, filepath),
+        catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => rm(tmp, { force: true })).pipe(Effect.ignore)
+            return yield* Effect.fail(error)
+          }),
+        ),
+      )
+
+      const mime = request.headers["content-type"]?.split(";")[0]?.trim() || undefined
+      return HttpServerResponse.jsonUnsafe({
+        path: uploadRelativeFromFile(info.directory, uploaded),
+        url: pathToFileURL(uploaded).href,
+        mime,
+        size,
+      })
+    }).pipe(
+      Effect.provide(Session.defaultLayer),
+      Effect.catchCause((cause) => {
+        const error = Cause.squash(cause)
+        return Effect.succeed(uploadError(error instanceof Error ? error.message || "Upload failed" : "Upload failed", 500))
+      }),
+    ),
+  ),
+).pipe(Layer.provide([authOnlyRouterLayer, workspaceRoutingLive, instanceContextLayer]))
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -203,6 +399,7 @@ export function createRoutes(
     instanceRoutes,
     v2Routes,
     docRoute,
+    sessionUploadRoute,
     uiRoute,
   ).pipe(
     Layer.provide([
