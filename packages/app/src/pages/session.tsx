@@ -418,6 +418,8 @@ export default function Page() {
   let reviewFrame: number | undefined
   let refreshFrame: number | undefined
   let refreshTimer: number | undefined
+  let idleRefreshFrame: number | undefined
+  let idleRefreshTimer: number | undefined
   let todoFrame: number | undefined
   let todoTimer: number | undefined
   let diffFrame: number | undefined
@@ -656,6 +658,36 @@ export default function Page() {
 
       return sync.session.sync(id)
     },
+  )
+
+  createEffect(
+    on(
+      () => {
+        const id = params.id
+        return [sync.directory, id, id ? (sync.data.session_status[id]?.type ?? "idle") : "idle"] as const
+      },
+      ([directory, id, status], prev) => {
+        if (idleRefreshFrame !== undefined) cancelAnimationFrame(idleRefreshFrame)
+        if (idleRefreshTimer !== undefined) window.clearTimeout(idleRefreshTimer)
+        idleRefreshFrame = undefined
+        idleRefreshTimer = undefined
+        if (!id) return
+        if (!prev || prev[0] !== directory || prev[1] !== id) return
+        if (prev[2] === "idle" || status !== "idle") return
+
+        idleRefreshFrame = requestAnimationFrame(() => {
+          idleRefreshFrame = undefined
+          idleRefreshTimer = window.setTimeout(() => {
+            idleRefreshTimer = undefined
+            if (sync.directory !== directory || params.id !== id) return
+            untrack(() => {
+              void sync.session.sync(id, { force: true })
+            })
+          }, 0)
+        })
+      },
+      { defer: true },
+    ),
   )
 
   createEffect(
@@ -1646,6 +1678,8 @@ export default function Page() {
     if (reviewFrame !== undefined) cancelAnimationFrame(reviewFrame)
     if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
     if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
+    if (idleRefreshFrame !== undefined) cancelAnimationFrame(idleRefreshFrame)
+    if (idleRefreshTimer !== undefined) window.clearTimeout(idleRefreshTimer)
     if (todoFrame !== undefined) cancelAnimationFrame(todoFrame)
     if (todoTimer !== undefined) window.clearTimeout(todoTimer)
     if (diffFrame !== undefined) cancelAnimationFrame(diffFrame)

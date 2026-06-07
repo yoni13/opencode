@@ -460,6 +460,72 @@ describe("applyDirectoryEvent", () => {
     expect(store.part[messageID]).toBeUndefined()
   })
 
+  test("buffers text deltas until their part arrives", () => {
+    const sessionID = "ses_1"
+    const messageID = "msg_1"
+    const partID = "prt_1"
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: { type: "message.part.delta", properties: { messageID, partID, field: "text", delta: "hello" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.part_text_accum_delta[partID]).toBe("hello")
+    expect(store.part[messageID]).toBeUndefined()
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.part.updated",
+        properties: { part: { ...textPart(partID, sessionID, messageID), text: "" } as Part },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    const started = store.part[messageID]?.[0]
+    expect(started?.type).toBe("text")
+    if (started?.type === "text") expect(started.text).toBe("hello")
+    expect(store.part_text_accum_delta[partID]).toBeUndefined()
+
+    applyDirectoryEvent({
+      event: { type: "message.part.delta", properties: { messageID, partID, field: "text", delta: " world" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    const streamed = store.part[messageID]?.[0]
+    expect(streamed?.type).toBe("text")
+    if (streamed?.type === "text") expect(streamed.text).toBe("hello world")
+
+    applyDirectoryEvent({
+      event: {
+        type: "message.part.updated",
+        properties: { part: { ...textPart(partID, sessionID, messageID), text: "hello world" } as Part },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    const completed = store.part[messageID]?.[0]
+    expect(completed?.type).toBe("text")
+    if (completed?.type === "text") expect(completed.text).toBe("hello world")
+    expect(store.part_text_accum_delta[partID]).toBeUndefined()
+  })
+
   test("tracks permission and question request lifecycles", () => {
     const sessionID = "ses_1"
     const [store, setStore] = createStore(

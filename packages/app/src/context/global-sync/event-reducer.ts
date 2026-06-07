@@ -61,6 +61,13 @@ function cleanupSessionCaches(
   )
 }
 
+function applyBufferedTextDelta(part: Part, delta: string | undefined) {
+  if (!delta) return part
+  if (part.type !== "text" && part.type !== "reasoning") return part
+  if (part.text) return part
+  return { ...part, text: delta } as Part
+}
+
 export function cleanupDroppedSessionCaches(
   store: Store<State>,
   setStore: SetStoreFunction<State>,
@@ -104,6 +111,7 @@ export function applyDirectoryEvent(input: {
   const event = input.event
   const limit = Math.max(input.store.limit, input.retainedLimit ?? 0)
   switch (event.type) {
+    case "server.connected":
     case "server.instance.disposed": {
       input.push(input.directory)
       return
@@ -235,7 +243,8 @@ export function applyDirectoryEvent(input: {
       break
     }
     case "message.part.updated": {
-      const part = (event.properties as { part: Part }).part
+      const props = event.properties as { part: Part }
+      const part = applyBufferedTextDelta(props.part, input.store.part_text_accum_delta[props.part.id])
       if (SKIP_PARTS.has(part.type)) break
       input.setStore(
         produce((draft) => {
@@ -287,11 +296,11 @@ export function applyDirectoryEvent(input: {
     }
     case "message.part.delta": {
       const props = event.properties as { messageID: string; partID: string; field: string; delta: string }
+      input.setStore("part_text_accum_delta", props.partID, (existing) => (existing ?? "") + props.delta)
       const parts = input.store.part[props.messageID]
       if (!parts) break
       const result = Binary.search(parts, props.partID, (p) => p.id)
       if (!result.found) break
-      input.setStore("part_text_accum_delta", props.partID, (existing) => (existing ?? "") + props.delta)
       input.setStore(
         "part",
         props.messageID,

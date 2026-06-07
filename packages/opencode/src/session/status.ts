@@ -76,13 +76,14 @@ export const layer = Layer.effect(
 
     const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
       const data = yield* InstanceState.get(state)
-      yield* events.publish(Event.Status, { sessionID, status })
       if (status.type === "idle") {
-        yield* events.publish(Event.Idle, { sessionID })
         data.delete(sessionID)
+        yield* events.publish(Event.Status, { sessionID, status })
+        yield* events.publish(Event.Idle, { sessionID })
         return
       }
       data.set(sessionID, status)
+      yield* events.publish(Event.Status, { sessionID, status })
     })
 
     return Service.of({ get, list, set })

@@ -23,6 +23,7 @@ const storedSessions: Record<string, Array<{ id: string; title?: string }>> = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
 const syncedDirectories: string[] = []
+const refreshedMessages: Array<{ directory: string; sessionID: string }> = []
 
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
@@ -54,6 +55,32 @@ const clientFor = (directory: string) => {
       shell: async () => {
         sentShell.push(directory)
         return { data: undefined }
+      },
+      messages: async (input: { sessionID: string }) => {
+        refreshedMessages.push({ directory, sessionID: input.sessionID })
+        return {
+          data: [
+            {
+              info: {
+                id: "msg_shell_user",
+                sessionID: input.sessionID,
+                role: "user",
+                time: { created: 1 },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "msg_shell_assistant",
+                sessionID: input.sessionID,
+                role: "assistant",
+                parentID: "msg_shell_user",
+                time: { created: 2, completed: 3 },
+              },
+              parts: [],
+            },
+          ],
+        }
       },
       prompt: async () => ({ data: undefined }),
       promptAsync: async () => ({ data: undefined }),
@@ -231,6 +258,7 @@ beforeEach(() => {
   params = {}
   sentShell.length = 0
   syncedDirectories.length = 0
+  refreshedMessages.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
@@ -327,12 +355,22 @@ describe("prompt submit worktree selection", () => {
     expect(createdClients).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(createdSessions).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(sentShell).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
-    expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
+    expect(syncedDirectories).toEqual([
+      "/repo/worktree-a",
+      "/repo/worktree-a",
+      "/repo/worktree-a",
+      "/repo/worktree-b",
+      "/repo/worktree-b",
+      "/repo/worktree-b",
+    ])
+    expect(refreshedMessages).toEqual([
+      { directory: "/repo/worktree-a", sessionID: "session-1" },
+      { directory: "/repo/worktree-b", sessionID: "session-2" },
+    ])
     expect(promoted).toEqual([
       { directory: "/repo/worktree-a", sessionID: "session-1" },
       { directory: "/repo/worktree-b", sessionID: "session-2" },
     ])
-    expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
   })
 
   test("applies auto-accept to newly created sessions", async () => {

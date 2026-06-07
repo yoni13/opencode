@@ -13,10 +13,11 @@ import { EventApi } from "../groups/event"
 const log = Log.create({ service: "server" })
 
 function eventData(data: unknown): Sse.Event {
+  const id = data && typeof data === "object" && "id" in data && typeof data.id === "string" ? data.id : undefined
   return {
     _tag: "Event",
     event: "message",
-    id: undefined,
+    id,
     data: JSON.stringify(data),
   }
 }

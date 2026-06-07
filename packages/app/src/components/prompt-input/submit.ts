@@ -65,6 +65,19 @@ export async function refreshPromptMessages(input: {
   sessionID: string
   messageID: string
 }) {
+  const messages = await refreshSessionMessages(input)
+
+  return messages.some(
+    (message) => message.role === "assistant" && message.parentID === input.messageID && !!message.time.completed,
+  )
+}
+
+export async function refreshSessionMessages(input: {
+  client: FollowupSendInput["client"]
+  serverSync: FollowupSendInput["serverSync"]
+  directory: string
+  sessionID: string
+}) {
   const page = await input.client.session.messages({ sessionID: input.sessionID, limit: 80 })
   const items = (page.data ?? []).filter((item) => !!item?.info?.id)
   const messages = items.map((item) => item.info).sort(byID)
@@ -83,9 +96,7 @@ export async function refreshPromptMessages(input: {
     }
   })
 
-  return messages.some(
-    (message) => message.role === "assistant" && message.parentID === input.messageID && !!message.time.completed,
-  )
+  return messages
 }
 
 async function refreshPromptMessagesUntilSettled(input: Parameters<typeof refreshPromptMessages>[0]) {
@@ -141,6 +152,12 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
           filename: attachment.filename,
         })),
       })
+      await refreshSessionMessages({
+        client: input.client,
+        serverSync: input.serverSync,
+        directory: input.draft.sessionDirectory,
+        sessionID: input.draft.sessionID,
+      }).catch(() => {})
       return true
     } catch (err) {
       setIdle()
@@ -541,20 +558,26 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     if (mode === "shell") {
       clearInput()
-      client.session
-        .shell({
+      try {
+        await client.session.shell({
           sessionID: session.id,
           agent,
           model,
           command: text,
         })
-        .catch((err) => {
-          showToast({
-            title: language.t("prompt.toast.shellSendFailed.title"),
-            description: errorMessage(err),
-          })
-          restoreInput()
+        await refreshSessionMessages({
+          client,
+          serverSync,
+          directory: sessionDirectory,
+          sessionID: session.id,
+        }).catch(() => {})
+      } catch (err) {
+        showToast({
+          title: language.t("prompt.toast.shellSendFailed.title"),
+          description: errorMessage(err),
         })
+        restoreInput()
+      }
       return
     }
 
@@ -564,8 +587,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       const customCommand = sync.data.command.find((c) => c.name === commandName)
       if (customCommand) {
         clearInput()
-        client.session
-          .command({
+        try {
+          await client.session.command({
             sessionID: session.id,
             command: commandName,
             arguments: args.join(" "),
@@ -580,13 +603,19 @@ export function createPromptSubmit(input: PromptSubmitInput) {
               filename: attachment.filename,
             })),
           })
-          .catch((err) => {
-            showToast({
-              title: language.t("prompt.toast.commandSendFailed.title"),
-              description: formatServerError(err, language.t, language.t("common.requestFailed")),
-            })
-            restoreInput()
+          await refreshSessionMessages({
+            client,
+            serverSync,
+            directory: sessionDirectory,
+            sessionID: session.id,
+          }).catch(() => {})
+        } catch (err) {
+          showToast({
+            title: language.t("prompt.toast.commandSendFailed.title"),
+            description: formatServerError(err, language.t, language.t("common.requestFailed")),
           })
+          restoreInput()
+        }
         return
       }
     }
