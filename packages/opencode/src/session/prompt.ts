@@ -644,29 +644,26 @@ export const layer = Layer.effect(
               )
               const runtime =
                 docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
-              const cmd = runtime
-                ? ChildProcess.make(
-                    "docker",
-                    [
-                      "exec",
-                      "-i",
-                      "-w",
-                      DockerRuntime.containerPath(runtime, cwd),
-                      ...Object.entries({ ...shellEnv.env, TERM: "dumb" }).flatMap(([key, value]) =>
-                        value === undefined ? [] : ["-e", `${key}=${value}`],
-                      ),
-                      runtime.container,
-                      "/bin/bash",
-                      "-lc",
-                      input.command,
-                    ],
-                    {
-                      cwd: runtime.hostDirectory,
-                      extendEnv: true,
-                      stdin: "ignore",
-                      forceKillAfter: "3 seconds",
-                    },
-                  )
+              const execution = runtime
+                ? DockerRuntime.execCommand({
+                    runtime,
+                    cwd,
+                    env: { ...shellEnv.env, TERM: "dumb" },
+                    command: ["/bin/bash", "-lc", input.command],
+                  })
+                : undefined
+              if (runtime) {
+                const release = yield* DockerRuntime.activity(runtime)
+                yield* Effect.addFinalizer(() => Effect.sync(release))
+              }
+              if (execution) yield* Effect.addFinalizer(() => DockerRuntime.terminate(execution))
+              const cmd = execution
+                ? ChildProcess.make(execution.command, execution.args, {
+                    cwd: execution.cwd,
+                    extendEnv: true,
+                    stdin: "ignore",
+                    forceKillAfter: "3 seconds",
+                  })
                 : ChildProcess.make(sh, Shell.args(sh, input.command, cwd), {
                     cwd,
                     extendEnv: true,

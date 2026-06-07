@@ -575,32 +575,53 @@ export const layer = Layer.effect(
         OTEL_RESOURCE_ATTRIBUTES: process.env.OTEL_RESOURCE_ATTRIBUTES,
       }
 
-      yield* WorkspaceAdapterRuntime.create(adapter, config, env)
-      if (info.directory) yield* project.addSandbox(input.projectID, info.directory).pipe(Effect.catch(() => Effect.void))
-      const target = yield* WorkspaceAdapterRuntime.target(info)
-      if (target.type === "local") {
-        yield* startSync(info)
+      return yield* Effect.gen(function* () {
+        yield* WorkspaceAdapterRuntime.create(adapter, config, env)
+        if (info.directory)
+          yield* project.addSandbox(input.projectID, info.directory).pipe(Effect.catch(() => Effect.void))
+        const target = yield* WorkspaceAdapterRuntime.target(info)
+        if (target.type === "local") {
+          yield* startSync(info)
+          return info
+        }
+
+        yield* Effect.all(
+          [
+            waitEvent({
+              timeout: TIMEOUT,
+              fn(event) {
+                if (event.workspace === info.id && event.payload.type === Event.Status.type) {
+                  const { status } = event.payload.properties
+                  return status === "error" || status === "connected"
+                }
+                return false
+              },
+            }),
+            startSync(info),
+          ],
+          { concurrency: 2, discard: true },
+        )
+
         return info
-      }
-
-      yield* Effect.all(
-        [
-          waitEvent({
-            timeout: TIMEOUT,
-            fn(event) {
-              if (event.workspace === info.id && event.payload.type === Event.Status.type) {
-                const { status } = event.payload.properties
-                return status === "error" || status === "connected"
-              }
-              return false
-            },
-          }),
-          startSync(info),
-        ],
-        { concurrency: 2, discard: true },
+      }).pipe(
+        Effect.onError(() =>
+          Effect.all(
+            [
+              stopSync(info.id).pipe(Effect.catchCause(() => Effect.void)),
+              WorkspaceAdapterRuntime.remove(info).pipe(Effect.catchCause(() => Effect.void)),
+              info.directory
+                ? project.removeSandbox(input.projectID, info.directory).pipe(Effect.catchCause(() => Effect.void))
+                : Effect.void,
+              db
+                .delete(WorkspaceTable)
+                .where(eq(WorkspaceTable.id, info.id))
+                .run()
+                .pipe(Effect.catchCause(() => Effect.void)),
+            ],
+            { discard: true },
+          ),
+        ),
       )
-
-      return info
     })
 
     const sessionWarp = Effect.fn("Workspace.sessionWarp")(function* (input: SessionWarpInput) {
@@ -925,9 +946,11 @@ export const layer = Layer.effect(
         () =>
           Effect.sync(() => {
             log.error("adapter not available when removing workspace", { type: row.type })
-          }),
+        }),
       )
 
+      if (info.directory)
+        yield* project.removeSandbox(info.projectID, info.directory).pipe(Effect.catchCause(() => Effect.void))
       yield* db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, id)).run().pipe(Effect.orDie)
       return info
     })

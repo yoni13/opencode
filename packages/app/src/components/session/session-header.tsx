@@ -8,6 +8,7 @@ import { Spinner } from "@opencode-ai/ui/spinner"
 import { showToast } from "@/utils/toast"
 import { Tooltip, TooltipKeybind } from "@opencode-ai/ui/tooltip"
 import { getFilename } from "@opencode-ai/core/util/path"
+import { createQuery } from "@tanstack/solid-query"
 import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Portal } from "solid-js/web"
@@ -17,6 +18,7 @@ import { useLayout } from "@/context/layout"
 import { usePlatform } from "@/context/platform"
 import { useServer } from "@/context/server"
 import { useSettings } from "@/context/settings"
+import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useTerminal } from "@/context/terminal"
 import { focusTerminalById } from "@/pages/session/helpers"
@@ -27,6 +29,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { StatusPopover, StatusPopoverV2 } from "../status-popover"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
+import { dockerContainerName } from "./docker"
 
 const OPEN_APPS = [
   "vscode",
@@ -138,6 +141,7 @@ export function SessionHeader() {
   const platform = usePlatform()
   const language = useLanguage()
   const settings = useSettings()
+  const sdk = useSDK()
   const sync = useSync()
   const terminal = useTerminal()
   const { params, view } = useSessionLayout()
@@ -147,6 +151,21 @@ export function SessionHeader() {
     const directory = projectDirectory()
     if (!directory) return
     return layout.projects.list().find((p) => p.worktree === directory || p.sandboxes?.includes(directory))
+  })
+  const session = createMemo(() => (params.id ? sync.session.get(params.id) : undefined))
+  const workspaceQuery = createQuery(() => ({
+    queryKey: [sdk.scope, session()?.projectID, "workspace-list"] as const,
+    enabled: !!session()?.workspaceID,
+    queryFn: () =>
+      sdk.client.experimental.workspace
+        .list()
+        .then((result) => result.data ?? [])
+        .catch(() => []),
+  }))
+  const containerName = createMemo(() => {
+    const workspaceID = session()?.workspaceID
+    if (!workspaceID) return
+    return dockerContainerName(workspaceQuery.data?.find((workspace) => workspace.id === workspaceID)?.extra)
   })
   const name = createMemo(() => {
     const current = project()
@@ -234,6 +253,7 @@ export function SessionHeader() {
     messageAgentColor(params.id ? sync.data.message[params.id] : undefined, sync.data.agent),
   )
   const v2ActionsState = createMemo<SessionHeaderV2ActionsState>(() => ({
+    container: containerName(),
     statusVisible: status(),
     statusLabel: language.t("status.popover.trigger"),
     reviewLabel: language.t("command.review.toggle"),
@@ -325,6 +345,7 @@ export function SessionHeader() {
               when={isDesktopV2}
               fallback={
                 <div class="flex items-center gap-2">
+                  <Show when={containerName()}>{(container) => <DockerContainerBadge name={container()} />}</Show>
                   <Show when={projectDirectory()}>
                     <div class="hidden xl:flex items-center">
                       <Show
@@ -520,6 +541,7 @@ export function SessionHeader() {
 }
 
 type SessionHeaderV2ActionsState = {
+  container?: string
   statusVisible: boolean
   statusLabel: string
   reviewLabel: string
@@ -531,6 +553,7 @@ type SessionHeaderV2ActionsState = {
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
   return (
     <div class="flex items-center gap-2">
+      <Show when={props.state.container}>{(container) => <DockerContainerBadge name={container()} />}</Show>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />
@@ -551,5 +574,19 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
         />
       </TooltipKeybind>
     </div>
+  )
+}
+
+function DockerContainerBadge(props: { name: string }) {
+  return (
+    <Tooltip placement="bottom" value={props.name}>
+      <div
+        class="flex h-6 max-w-48 min-w-0 items-center gap-1.5 rounded-md border border-border-weak-base bg-surface-panel px-2 text-11-regular text-text-weak"
+        aria-label={props.name}
+      >
+        <Icon name="server" size="small" class="shrink-0 text-icon-weak" />
+        <span class="min-w-0 truncate font-mono">{props.name}</span>
+      </div>
+    </Tooltip>
   )
 }

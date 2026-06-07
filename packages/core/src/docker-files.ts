@@ -25,6 +25,7 @@ export function readBytes(runtime: Runtime, filepath: string) {
   }).pipe(
     Effect.flatMap((result) => {
       if (result.exitCode !== 0) return Effect.die(new Error(result.stderr.toString("utf8") || "Unable to read file"))
+      if (result.stdoutTruncated) return Effect.die(new Error(`File is too large to read safely: ${filepath}`))
       return Effect.succeed(Buffer.from(result.stdout.toString("utf8"), "base64"))
     }),
   )

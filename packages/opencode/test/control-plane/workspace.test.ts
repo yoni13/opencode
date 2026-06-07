@@ -531,7 +531,7 @@ describe("workspace CRUD", () => {
   )
 
   it.instance(
-    "create leaves the inserted row when adapter create fails",
+    "create rolls back the inserted row and adapter resources when adapter create fails",
     () =>
       Effect.gen(function* () {
         const instance = yield* requireInstance
@@ -555,10 +555,9 @@ describe("workspace CRUD", () => {
         )
 
         const rows = yield* workspace.list(instance.project)
-        expect(rows).toHaveLength(1)
-        expect(rows[0]).toMatchObject({ type, branch: "branch", extra: { x: 1 } })
+        expect(rows).toEqual([])
         expect(recorded.calls.target).toHaveLength(0)
-        yield* workspace.remove(rows[0].id)
+        expect(recorded.calls.remove).toHaveLength(1)
       }),
     { git: true },
   )
@@ -774,10 +773,21 @@ describe("workspace CRUD", () => {
         const instance = yield* requireInstance
         const workspace = yield* Workspace.Service
         const sessionSvc = yield* SessionNs.Service
+        const { db } = yield* Database.Service
         const type = unique("remove-local")
         const recorded = localAdapter(path.join(dir, "remove-local"))
         registerAdapter(instance.project.id, type, recorded.adapter)
         const info = yield* workspace.create({ type, branch: null, projectID: instance.project.id, extra: null })
+        expect(
+          (
+            yield* db
+              .select({ sandboxes: ProjectTable.sandboxes })
+              .from(ProjectTable)
+              .where(eq(ProjectTable.id, instance.project.id))
+              .get()
+              .pipe(Effect.orDie)
+          )?.sandboxes,
+        ).toContain(AbsolutePath.make(info.directory!))
         const one = yield* sessionSvc.create({})
         const two = yield* sessionSvc.create({})
         yield* attachSessionToWorkspace(one.id, info.id)
@@ -787,9 +797,18 @@ describe("workspace CRUD", () => {
 
         expect(removed).toEqual(info)
         expect(yield* workspace.get(info.id)).toBeUndefined()
+        expect(
+          (
+            yield* db
+              .select({ sandboxes: ProjectTable.sandboxes })
+              .from(ProjectTable)
+              .where(eq(ProjectTable.id, instance.project.id))
+              .get()
+              .pipe(Effect.orDie)
+          )?.sandboxes,
+        ).not.toContain(AbsolutePath.make(info.directory!))
         expect(recorded.calls.remove).toEqual([info])
         expect((yield* workspace.status()).find((item) => item.workspaceID === info.id)?.status).toBeUndefined()
-        const { db } = yield* Database.Service
         expect(
           yield* db
             .select({ id: SessionTable.id })

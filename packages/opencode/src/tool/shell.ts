@@ -319,39 +319,28 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
   })
 }
 
-function dockerCwd(hostCwd: string, hostRoot: string, containerRoot: string) {
-  const relative = path.relative(hostRoot, hostCwd)
-  if (!relative || relative === ".") return containerRoot
-  if (relative.startsWith("..")) return containerRoot
-  return path.posix.join(containerRoot, relative.split(path.sep).join(path.posix.sep))
-}
-
 function dockerCmd(input: {
-  container: string
-  hostDirectory: string
-  workspacePath: string
+  runtime: DockerRuntime.WorkspaceExtra
   shell: string
   command: string
   cwd: string
   env: NodeJS.ProcessEnv
 }) {
-  const args = [
-    "exec",
-    "-i",
-    "-w",
-    dockerCwd(input.cwd, input.hostDirectory, input.workspacePath),
-    ...Object.entries(input.env).flatMap(([key, value]) => (value === undefined ? [] : ["--env", `${key}=${value}`])),
-    input.container,
-    Shell.name(input.shell) === "sh" ? "/bin/sh" : "/bin/bash",
-    "-lc",
-    input.command,
-  ]
-  return ChildProcess.make("docker", args, {
-    cwd: input.hostDirectory,
-    env: process.env,
-    stdin: "ignore",
-    detached: process.platform !== "win32",
+  const execution = DockerRuntime.execCommand({
+    runtime: input.runtime,
+    cwd: input.cwd,
+    env: input.env,
+    command: [Shell.name(input.shell) === "sh" ? "/bin/sh" : "/bin/bash", "-lc", input.command],
   })
+  return {
+    execution,
+    process: ChildProcess.make(execution.command, execution.args, {
+      cwd: execution.cwd,
+      env: process.env,
+      stdin: "ignore",
+      detached: process.platform !== "win32",
+    }),
+  }
 }
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
@@ -536,18 +525,22 @@ export const ShellTool = Tool.define(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(closeSink)
           const docker = yield* dockerWorkspace()
+          const dockerProcess = docker
+            ? dockerCmd({
+                runtime: docker,
+                shell: input.shell,
+                command: input.command,
+                cwd: input.cwd,
+                env: input.env,
+              })
+            : undefined
+          if (docker) {
+            const release = yield* DockerRuntime.activity(docker)
+            yield* Effect.addFinalizer(() => Effect.sync(release))
+          }
+          if (dockerProcess) yield* Effect.addFinalizer(() => DockerRuntime.terminate(dockerProcess.execution))
           const handle = yield* spawner.spawn(
-            docker
-              ? dockerCmd({
-                  container: docker.container,
-                  hostDirectory: docker.hostDirectory,
-                  workspacePath: docker.workspacePath,
-                  shell: input.shell,
-                  command: input.command,
-                  cwd: input.cwd,
-                  env: input.env,
-                })
-              : cmd(input.shell, input.command, input.cwd, input.env),
+            dockerProcess?.process ?? cmd(input.shell, input.command, input.cwd, input.env),
           )
 
           yield* Effect.forkScoped(

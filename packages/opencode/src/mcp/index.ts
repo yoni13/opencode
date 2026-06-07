@@ -225,6 +225,13 @@ interface CreateResult {
   mcpClient?: MCPClient
   status: Status
   defs?: MCPToolDef[]
+  cleanup?: Effect.Effect<void>
+}
+
+interface ConnectResult {
+  client?: MCPClient
+  status: Status
+  cleanup?: Effect.Effect<void>
 }
 
 interface AuthResult {
@@ -240,6 +247,7 @@ interface State {
   status: Record<string, Status>
   clients: Record<string, MCPClient>
   defs: Record<string, MCPToolDef[]>
+  cleanup: Record<string, Effect.Effect<void>>
 }
 
 export interface Interface {
@@ -433,44 +441,52 @@ export const layer = Layer.effect(
         ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
         ...mcp.environment,
       }
+      const execution = runtime
+        ? DockerRuntime.execCommand({
+            runtime,
+            cwd,
+            env: environment,
+            command: [cmd, ...args],
+          })
+        : undefined
       const transport = new StdioClientTransport({
         stderr: "pipe",
-        command: runtime ? "docker" : cmd,
-        args: runtime
-          ? [
-              "exec",
-              "-i",
-              "-w",
-              DockerRuntime.containerPath(runtime, cwd),
-              ...Object.entries(environment).flatMap(([key, value]) =>
-                value === undefined ? [] : ["-e", `${key}=${value}`],
-              ),
-              runtime.container,
-              cmd,
-              ...args,
-            ]
-          : args,
-        cwd: runtime ? runtime.hostDirectory : cwd,
+        command: execution?.command ?? cmd,
+        args: execution ? [...execution.args] : args,
+        cwd: execution?.cwd ?? cwd,
         env: {
           ...process.env,
           ...environment,
         },
       })
+      const release = runtime ? yield* DockerRuntime.activity(runtime) : undefined
+      const cleanup = execution
+        ? DockerRuntime.terminate(execution).pipe(
+            Effect.ensuring(Effect.sync(() => release?.())),
+          )
+        : Effect.void
       transport.stderr?.on("data", (chunk: Buffer) => {
         log.info(`mcp stderr: ${chunk.toString()}`, { key })
       })
 
       const connectTimeout = mcp.timeout ?? DEFAULT_TIMEOUT
       return yield* connectTransport(transport, connectTimeout).pipe(
-        Effect.map((client): { client: MCPClient | undefined; status: Status } => ({
+        Effect.map((client): { client: MCPClient | undefined; status: Status; cleanup: Effect.Effect<void> } => ({
           client,
           status: { status: "connected" },
+          cleanup,
         })),
-        Effect.catch((error): Effect.Effect<{ client: MCPClient | undefined; status: Status }> => {
-          const msg = error instanceof Error ? error.message : String(error)
-          log.error("local mcp startup failed", { key, command: mcp.command, cwd, error: msg })
-          return Effect.succeed({ client: undefined, status: { status: "failed", error: msg } })
-        }),
+        Effect.catch((error) =>
+          cleanup.pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                const msg = error instanceof Error ? error.message : String(error)
+                log.error("local mcp startup failed", { key, command: mcp.command, cwd, error: msg })
+                return { client: undefined, status: { status: "failed" as const, error: msg } }
+              }),
+            ),
+          ),
+        ),
       )
     })
 
@@ -482,10 +498,12 @@ export const layer = Layer.effect(
 
       log.info("found", { key, type: mcp.type })
 
-      const { client: mcpClient, status } =
+      const result: ConnectResult =
         mcp.type === "remote"
           ? yield* connectRemote(key, mcp as ConfigMCPV1.Info & { type: "remote" })
           : yield* connectLocal(key, mcp as ConfigMCPV1.Info & { type: "local" })
+      const { client: mcpClient, status } = result
+      const cleanup = result.cleanup
 
       if (!mcpClient) {
         return { status } satisfies CreateResult
@@ -494,11 +512,12 @@ export const layer = Layer.effect(
       const listed = yield* defs(key, mcpClient, mcp.timeout)
       if (!listed) {
         yield* Effect.tryPromise(() => mcpClient.close()).pipe(Effect.ignore)
+        yield* (cleanup ?? Effect.void)
         return { status: { status: "failed", error: "Failed to get tools" } } satisfies CreateResult
       }
 
       log.info("create() successfully created client", { key, toolCount: listed.length })
-      return { mcpClient, status, defs: listed } satisfies CreateResult
+      return { mcpClient, status, defs: listed, cleanup } satisfies CreateResult
     })
     const cfgSvc = yield* Config.Service
 
@@ -550,6 +569,7 @@ export const layer = Layer.effect(
           status: {},
           clients: {},
           defs: {},
+          cleanup: {},
         }
 
         yield* Effect.forEach(
@@ -573,6 +593,7 @@ export const layer = Layer.effect(
               if (result.mcpClient) {
                 s.clients[key] = result.mcpClient
                 s.defs[key] = result.defs!
+                if (result.cleanup) s.cleanup[key] = result.cleanup
                 watch(s, key, result.mcpClient, bridge, mcp.timeout)
               }
             }),
@@ -582,8 +603,8 @@ export const layer = Layer.effect(
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
             yield* Effect.forEach(
-              Object.values(s.clients),
-              (client) =>
+              Object.entries(s.clients),
+              ([name, client]) =>
                 Effect.gen(function* () {
                   const pid = client.transport instanceof StdioClientTransport ? client.transport.pid : null
                   if (typeof pid === "number") {
@@ -595,6 +616,7 @@ export const layer = Layer.effect(
                     }
                   }
                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+                  yield* (s.cleanup[name] ?? Effect.void)
                 }),
               { concurrency: "unbounded" },
             )
@@ -608,9 +630,11 @@ export const layer = Layer.effect(
 
     function closeClient(s: State, name: string) {
       const client = s.clients[name]
+      const cleanup = s.cleanup[name]
       delete s.defs[name]
-      if (!client) return Effect.void
-      return Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
+      delete s.cleanup[name]
+      if (!client) return cleanup ?? Effect.void
+      return Effect.tryPromise(() => client.close()).pipe(Effect.ignore, Effect.andThen(cleanup ?? Effect.void))
     }
 
     const storeClient = Effect.fnUntraced(function* (
@@ -619,12 +643,14 @@ export const layer = Layer.effect(
       client: MCPClient,
       listed: MCPToolDef[],
       timeout?: number,
+      cleanup?: Effect.Effect<void>,
     ) {
       const bridge = yield* EffectBridge.make()
       yield* closeClient(s, name)
       s.status[name] = { status: "connected" }
       s.clients[name] = client
       s.defs[name] = listed
+      if (cleanup) s.cleanup[name] = cleanup
       watch(s, name, client, bridge, timeout)
       return s.status[name]
     })
@@ -664,7 +690,7 @@ export const layer = Layer.effect(
         return result.status
       }
 
-      return yield* storeClient(s, name, result.mcpClient, result.defs!, mcp.timeout)
+      return yield* storeClient(s, name, result.mcpClient, result.defs!, mcp.timeout, result.cleanup)
     })
 
     const add = Effect.fn("MCP.add")(function* (name: string, mcp: ConfigMCPV1.Info) {

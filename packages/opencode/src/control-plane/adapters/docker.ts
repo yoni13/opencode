@@ -7,6 +7,7 @@ import dockerfile from "./docker/Dockerfile" with { type: "text" }
 import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { type WorkspaceAdapter, type WorkspaceAdapterContext, type WorkspaceInfo } from "../types"
 import {
   DOCKER_CONFIG_PATH,
@@ -38,11 +39,33 @@ function requireInstance(context: WorkspaceAdapterContext | undefined) {
 }
 
 function dockerName(id: string) {
-  return `opencode-${id.replace(/[^a-zA-Z0-9_.-]/g, "-")}`
+  return `opencode-${id}`
 }
 
 function workspaceRoot(id: string) {
   return path.join(Global.Path.data, "docker-workspace", id)
+}
+
+function requireDockerExtra(info: WorkspaceInfo) {
+  const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
+  if (!extra) throw new Error("Docker workspace metadata is missing")
+  const root = workspaceRoot(info.id)
+  const expected = {
+    container: dockerName(info.id),
+    hostDirectory: path.join(root, "workspace"),
+    workspacePath: DOCKER_WORKSPACE_PATH,
+    configDirectory: path.join(root, "config"),
+  }
+  if (
+    extra.container !== expected.container ||
+    (extra.workspaceID !== undefined && extra.workspaceID !== info.id) ||
+    path.resolve(extra.hostDirectory) !== path.resolve(expected.hostDirectory) ||
+    extra.workspacePath !== expected.workspacePath ||
+    path.resolve(extra.configDirectory) !== path.resolve(expected.configDirectory)
+  ) {
+    throw new Error(`Docker workspace metadata does not match workspace ${info.id}`)
+  }
+  return extra
 }
 
 async function configuredImage(info: WorkspaceInfo, instanceDirectory: string) {
@@ -64,6 +87,13 @@ async function exists(file: string) {
     .stat(file)
     .then(() => true)
     .catch(() => false)
+}
+
+async function assertWorkspacePaths(extra: DockerWorkspaceExtra) {
+  for (const file of [path.dirname(extra.hostDirectory), extra.hostDirectory, extra.configDirectory]) {
+    const stat = await fs.lstat(file).catch(() => undefined)
+    if (stat?.isSymbolicLink()) throw new Error(`Docker workspace path cannot be a symbolic link: ${file}`)
+  }
 }
 
 async function copyProject(source: string, target: string) {
@@ -102,7 +132,33 @@ export async function assertDockerAvailable() {
       ].join("\n"),
     })
   }
-  if (result.stdout.trim()) return
+  if (result.stdout.trim()) {
+    const containers = await docker(["ps", "--format", "{{.Names}}"]).then((value) =>
+      value.stdout.split("\n").filter((container) => container.startsWith("opencode-wrk")),
+    )
+    for (const container of containers) {
+      const id = container.slice("opencode-".length)
+      const workspaceID = await Promise.resolve()
+        .then(() => WorkspaceV2.ID.ascending(id))
+        .catch(() => undefined)
+      if (!workspaceID) continue
+      const root = workspaceRoot(workspaceID)
+      const extra = {
+        kind: "docker",
+        workspaceID,
+        image: "",
+        container,
+        hostDirectory: path.join(root, "workspace"),
+        workspacePath: DOCKER_WORKSPACE_PATH,
+        configDirectory: path.join(root, "config"),
+        createdAt: 0,
+      } satisfies DockerWorkspaceExtra
+      const owned = await inspectContainer(extra).catch(() => undefined)
+      if (!owned) continue
+      DockerRuntime.scheduleIdleStop(extra)
+    }
+    return
+  }
   throw new DockerUnavailableError({
     message: [
       "Docker is required for opencode Docker sessions, but Docker did not return server information.",
@@ -145,18 +201,48 @@ async function ensureImage(image: string, setup: string | undefined) {
   await build
 }
 
-async function removeContainer(container: string) {
-  await docker(["rm", "-f", container]).catch(() => undefined)
+type ContainerInspect = {
+  Config?: { Labels?: Record<string, string> }
+  Mounts?: { Source?: string; Destination?: string; RW?: boolean }[]
+  State?: { Running?: boolean }
+}
+
+async function inspectContainer(extra: DockerWorkspaceExtra) {
+  const result = await docker(["container", "inspect", extra.container])
+    .then((value) => JSON.parse(value.stdout) as ContainerInspect[])
+    .catch(() => undefined)
+  const container = result?.[0]
+  if (!container) return
+
+  DockerRuntime.assertContainerOwnership(extra, container)
+  const labels = container.Config?.Labels ?? {}
+  const managed = labels[DockerRuntime.MANAGED_LABEL]
+  const workspace = labels[DockerRuntime.WORKSPACE_LABEL]
+  return {
+    running: container.State?.Running === true,
+    legacy: managed === undefined || workspace === undefined,
+  }
+}
+
+async function removeContainer(extra: DockerWorkspaceExtra) {
+  const existing = await inspectContainer(extra)
+  if (!existing) return
+  await docker(["rm", "-f", extra.container])
 }
 
 async function startContainer(extra: DockerWorkspaceExtra, setup: string | undefined) {
+  await assertWorkspacePaths(extra)
   await ensureImage(extra.image, setup)
-  await removeContainer(extra.container)
+  await removeContainer(extra)
   await docker([
     "run",
     "-d",
     "--name",
     extra.container,
+    "--label",
+    `${DockerRuntime.MANAGED_LABEL}=true`,
+    "--label",
+    `${DockerRuntime.WORKSPACE_LABEL}=${extra.workspaceID ?? extra.container.slice(9)}`,
     "-w",
     extra.workspacePath,
     "-v",
@@ -175,18 +261,17 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
 
 async function ensureContainer(extra: DockerWorkspaceExtra) {
   DockerRuntime.clearIdleStop(extra)
-  const running = await docker(["inspect", "--format", "{{.State.Running}}", extra.container])
-    .then((result) => result.stdout.trim() === "true")
-    .catch(() => false)
-  if (running) {
+  const existing = await inspectContainer(extra)
+  if (existing?.legacy) {
+    await startContainer(extra, undefined)
     DockerRuntime.scheduleIdleStop(extra)
     return
   }
-
-  const exists = await docker(["container", "inspect", extra.container])
-    .then(() => true)
-    .catch(() => false)
-  if (exists) {
+  if (existing?.running) {
+    DockerRuntime.scheduleIdleStop(extra)
+    return
+  }
+  if (existing) {
     await docker(["start", extra.container])
     DockerRuntime.scheduleIdleStop(extra)
     return
@@ -204,6 +289,7 @@ export const DockerAdapter: WorkspaceAdapter = {
     const root = workspaceRoot(info.id)
     const next = {
       kind: "docker" as const,
+      workspaceID: info.id,
       image: await configuredImage(info, instance.directory),
       container: dockerName(info.id),
       hostDirectory: path.join(root, "workspace"),
@@ -220,9 +306,9 @@ export const DockerAdapter: WorkspaceAdapter = {
   },
   async create(info, _env, _from, context) {
     const instance = requireInstance(context)
-    const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
-    if (!extra) throw new Error("Docker workspace metadata is missing")
+    const extra = requireDockerExtra(info)
 
+    await assertWorkspacePaths(extra)
     await fs.mkdir(extra.hostDirectory, { recursive: true })
     await copyProject(instance.directory, extra.hostDirectory)
     await snapshotConfig(instance.directory, extra.configDirectory)
@@ -237,16 +323,16 @@ export const DockerAdapter: WorkspaceAdapter = {
     await ensureContainer(extra)
   },
   async remove(info) {
-    const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
-    if (!extra) throw new Error("Docker workspace metadata is missing")
+    const extra = requireDockerExtra(info)
 
     DockerRuntime.clearIdleStop(extra)
-    await removeContainer(extra.container)
+    await assertWorkspacePaths(extra)
+    await removeContainer(extra)
     await fs.rm(path.dirname(extra.hostDirectory), { recursive: true, force: true })
   },
   async target(info) {
-    const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
-    if (!extra) throw new Error("Docker workspace metadata is missing")
+    const extra = requireDockerExtra(info)
+    await assertWorkspacePaths(extra)
     await ensureContainer(extra)
     return {
       type: "local",

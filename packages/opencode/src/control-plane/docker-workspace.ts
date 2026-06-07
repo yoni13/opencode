@@ -1,10 +1,12 @@
 import { Schema } from "effect"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 
 export const DOCKER_WORKSPACE_PATH = "/workspace"
 export const DOCKER_CONFIG_PATH = "/root/.config/opencode"
 
 export const DockerWorkspaceExtra = Schema.Struct({
   kind: Schema.Literal("docker"),
+  workspaceID: Schema.optional(WorkspaceV2.ID),
   image: Schema.String,
   container: Schema.String,
   hostDirectory: Schema.String,
