@@ -176,6 +176,7 @@ export const layer = Layer.effect(
     const http = yield* HttpClient.HttpClient
     const events = yield* EventV2Bridge.Service
     const vcs = yield* Vcs.Service
+    const project = yield* Project.Service
     const flags = yield* RuntimeFlags.Service
     const fs = yield* FSUtil.Service
     const { db } = yield* Database.Service
@@ -575,6 +576,7 @@ export const layer = Layer.effect(
       }
 
       yield* WorkspaceAdapterRuntime.create(adapter, config, env)
+      if (info.directory) yield* project.addSandbox(input.projectID, info.directory).pipe(Effect.catch(() => Effect.void))
       const target = yield* WorkspaceAdapterRuntime.target(info)
       if (target.type === "local") {
         yield* startSync(info)

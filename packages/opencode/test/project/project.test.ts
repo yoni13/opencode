@@ -723,6 +723,34 @@ describe("Project.addSandbox and Project.removeSandbox", () => {
       expect(events.some((e) => e.payload.type === Project.Event.Updated.type)).toBe(true)
     }),
   )
+
+  it.live("list and get include workspace directories as sandboxes", () =>
+    Effect.gen(function* () {
+      const project = yield* Project.Service
+      const { db } = yield* Database.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const result = yield* project.fromDirectory(tmp)
+      const sandboxDir = path.join(tmp, "docker-workspace")
+
+      yield* db
+        .insert(WorkspaceTable)
+        .values({
+          id: WorkspaceV2.ID.create(),
+          type: "docker",
+          name: "docker",
+          directory: sandboxDir,
+          project_id: result.project.id,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const listed = yield* project.list()
+      expect(listed.find((item) => item.id === result.project.id)?.sandboxes).toContain(sandboxDir)
+
+      const found = yield* project.get(result.project.id)
+      expect(found?.sandboxes).toContain(sandboxDir)
+    }),
+  )
 })
 
 describe("Project.fromDirectory with bare repos", () => {

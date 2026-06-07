@@ -87,6 +87,13 @@ export function fromRow(row: Row): Info {
   }
 }
 
+function mergeWorkspaceSandboxes(project: Info, directories: string[]) {
+  return {
+    ...project,
+    sandboxes: [...new Set([...project.sandboxes, ...directories])],
+  }
+}
+
 export const UpdateInput = Schema.Struct({
   projectID: ProjectV2.ID,
   name: Schema.optional(Schema.String),
@@ -375,12 +382,33 @@ export const layer = Layer.effect(
     })
 
     const list = Effect.fn("Project.list")(function* () {
-      return (yield* db.select().from(ProjectTable).all().pipe(Effect.orDie)).map(fromRow)
+      const rows = yield* db.select().from(ProjectTable).all().pipe(Effect.orDie)
+      const workspaceRows = yield* db
+        .select({ project_id: WorkspaceTable.project_id, directory: WorkspaceTable.directory })
+        .from(WorkspaceTable)
+        .all()
+        .pipe(Effect.orDie)
+      const workspaces = workspaceRows.reduce((acc, row) => {
+        if (!row.directory) return acc
+        acc.set(row.project_id, [...(acc.get(row.project_id) ?? []), row.directory])
+        return acc
+      }, new Map<ProjectV2.ID, string[]>())
+      return rows.map((row) => mergeWorkspaceSandboxes(fromRow(row), workspaces.get(row.id) ?? []))
     })
 
     const get = Effect.fn("Project.get")(function* (id: ProjectV2.ID) {
       const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, id)).get().pipe(Effect.orDie)
-      return row ? fromRow(row) : undefined
+      if (!row) return undefined
+      const workspaces = yield* db
+        .select({ directory: WorkspaceTable.directory })
+        .from(WorkspaceTable)
+        .where(eq(WorkspaceTable.project_id, id))
+        .all()
+        .pipe(Effect.orDie)
+      return mergeWorkspaceSandboxes(
+        fromRow(row),
+        workspaces.map((workspace) => workspace.directory).filter((directory): directory is string => !!directory),
+      )
     })
 
     const update = Effect.fn("Project.update")(function* (input: UpdateInput) {
