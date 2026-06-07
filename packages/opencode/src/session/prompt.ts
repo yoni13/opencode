@@ -1077,6 +1077,24 @@ export const layer = Layer.effect(
                 ]
               }
 
+              if (!modelSupportsFilePart(mime, selectedModel)) {
+                const ctx = yield* InstanceState.context
+                const relative = path.relative(ctx.directory, filepath)
+                const displayPath =
+                  relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+                    ? relative.split(path.sep).join("/")
+                    : filepath
+                return [
+                  {
+                    messageID: info.id,
+                    sessionID: input.sessionID,
+                    type: "text",
+                    synthetic: true,
+                    text: `Attached file "${part.filename ?? path.basename(filepath)}" (${mime}) is available at ${displayPath}. Use this path to inspect it.`,
+                  },
+                ]
+              }
+
               return [
                 {
                   messageID: info.id,

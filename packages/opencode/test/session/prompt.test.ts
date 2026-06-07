@@ -1967,6 +1967,46 @@ noLLMServer.instance(
 )
 
 noLLMServer.instance(
+  "does not forward unsupported file attachments as model media",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({})
+      const apk = path.join(dir, "app.apk")
+
+      yield* writeText(apk, "apk payload")
+      const msg = yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [
+          {
+            type: "file",
+            mime: "application/vnd.android.package-archive",
+            url: `file://${apk}`,
+            filename: "app.apk",
+          },
+        ],
+      })
+
+      if (msg.info.role !== "user") throw new Error("expected user message")
+      expect(
+        msg.parts.some(
+          (part) => part.type === "text" && part.synthetic && part.text.includes("app.apk") && part.text.includes("Use this path"),
+        ),
+      ).toBe(true)
+      expect(msg.parts.some((part) => part.type === "file" && part.mime === "application/vnd.android.package-archive")).toBe(
+        false,
+      )
+
+      yield* sessions.remove(session.id)
+    }),
+  { config: cfg },
+)
+
+noLLMServer.instance(
   "materializes text uploads in the workspace root",
   () =>
     Effect.gen(function* () {
