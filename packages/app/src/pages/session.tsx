@@ -626,7 +626,7 @@ export default function Page() {
   const hasScrollGesture = () => Date.now() - ui.scrollGesture < scrollGestureWindowMs
 
   const [sessionSync] = createResource(
-    () => [sdk.directory, params.id] as const,
+    () => [sync.directory, params.id] as const,
     ([directory, id]) => {
       if (refreshFrame !== undefined) cancelAnimationFrame(refreshFrame)
       if (refreshTimer !== undefined) window.clearTimeout(refreshTimer)
@@ -647,7 +647,7 @@ export default function Page() {
         refreshFrame = undefined
         refreshTimer = window.setTimeout(() => {
           refreshTimer = undefined
-          if (params.id !== id) return
+          if (sync.directory !== directory || params.id !== id) return
           untrack(() => {
             if (stale) void sync.session.sync(id, { force: true })
           })

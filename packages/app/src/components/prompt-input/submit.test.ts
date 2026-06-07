@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { Prompt } from "@/context/prompt"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
+let refreshPromptMessages: typeof import("./submit").refreshPromptMessages
 
 const createdClients: string[] = []
 const createdWorkspaceClients: Array<{ directory: string; workspaceID?: string }> = []
@@ -81,6 +82,7 @@ beforeAll(async () => {
   }))
 
   mock.module("@opencode-ai/ui/toast", () => ({
+    Toast: {},
     showToast: () => 0,
   }))
 
@@ -214,6 +216,7 @@ beforeAll(async () => {
 
   const mod = await import("./submit")
   createPromptSubmit = mod.createPromptSubmit
+  refreshPromptMessages = mod.refreshPromptMessages
 })
 
 beforeEach(() => {
@@ -419,5 +422,59 @@ describe("prompt submit worktree selection", () => {
 
     expect(storedSessions["/repo/worktree-a"]).toEqual([{ id: "session-1", title: "New session 1" }])
     expect(optimisticSeeded).toEqual([true])
+  })
+
+  test("fallback refresh waits for the submitted message response", async () => {
+    const setCalls: unknown[][] = []
+    const serverSync = {
+      child: () => [{}, (...args: unknown[]) => setCalls.push(args)],
+    }
+    const client = {
+      session: {
+        messages: async () => ({
+          data: [
+            {
+              info: {
+                id: "msg_old_user",
+                sessionID: "session-1",
+                role: "user",
+                time: { created: 1 },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "msg_old_assistant",
+                sessionID: "session-1",
+                role: "assistant",
+                parentID: "msg_old_user",
+                time: { created: 2, completed: 3 },
+              },
+              parts: [],
+            },
+            {
+              info: {
+                id: "msg_new_user",
+                sessionID: "session-1",
+                role: "user",
+                time: { created: 4 },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      },
+    }
+
+    const settled = await refreshPromptMessages({
+      client: client as unknown as Parameters<typeof refreshPromptMessages>[0]["client"],
+      serverSync: serverSync as unknown as Parameters<typeof refreshPromptMessages>[0]["serverSync"],
+      directory: "/repo/main",
+      sessionID: "session-1",
+      messageID: "msg_new_user",
+    })
+
+    expect(settled).toBe(false)
+    expect(setCalls.some((args) => args[0] === "message" && args[1] === "session-1")).toBe(true)
   })
 })

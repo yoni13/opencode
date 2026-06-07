@@ -58,11 +58,12 @@ const byID = <T extends { id: string }>(a: T, b: T) => (a.id < b.id ? -1 : a.id 
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-async function refreshPromptMessages(input: {
+export async function refreshPromptMessages(input: {
   client: FollowupSendInput["client"]
   serverSync: FollowupSendInput["serverSync"]
   directory: string
   sessionID: string
+  messageID: string
 }) {
   const page = await input.client.session.messages({ sessionID: input.sessionID, limit: 80 })
   const items = (page.data ?? []).filter((item) => !!item?.info?.id)
@@ -82,7 +83,9 @@ async function refreshPromptMessages(input: {
     }
   })
 
-  return messages.some((message) => message.role === "assistant" && !!message.time.completed)
+  return messages.some(
+    (message) => message.role === "assistant" && message.parentID === input.messageID && !!message.time.completed,
+  )
 }
 
 async function refreshPromptMessagesUntilSettled(input: Parameters<typeof refreshPromptMessages>[0]) {
@@ -207,6 +210,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       serverSync: input.serverSync,
       directory: input.draft.sessionDirectory,
       sessionID: input.draft.sessionID,
+      messageID,
     }).catch(() => {})
     return true
   } catch (err) {
