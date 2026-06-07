@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 import dockerfile from "./docker/Dockerfile" with { type: "text" }
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { type WorkspaceAdapter, type WorkspaceAdapterContext, type WorkspaceInfo } from "../types"
@@ -24,9 +25,12 @@ const DockerConfig = Schema.Struct({
 })
 const decodeDockerConfig = Schema.decodeUnknownOption(DockerConfig)
 
-export class DockerUnavailableError extends Schema.TaggedErrorClass<DockerUnavailableError>()("DockerUnavailableError", {
-  message: Schema.String,
-}) {}
+export class DockerUnavailableError extends Schema.TaggedErrorClass<DockerUnavailableError>()(
+  "DockerUnavailableError",
+  {
+    message: Schema.String,
+  },
+) {}
 
 function requireInstance(context: WorkspaceAdapterContext | undefined) {
   if (!context?.instance) throw new Error("Docker adapter requires an instance context")
@@ -170,20 +174,26 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
 }
 
 async function ensureContainer(extra: DockerWorkspaceExtra) {
+  DockerRuntime.clearIdleStop(extra)
   const running = await docker(["inspect", "--format", "{{.State.Running}}", extra.container])
     .then((result) => result.stdout.trim() === "true")
     .catch(() => false)
-  if (running) return
+  if (running) {
+    DockerRuntime.scheduleIdleStop(extra)
+    return
+  }
 
   const exists = await docker(["container", "inspect", extra.container])
     .then(() => true)
     .catch(() => false)
   if (exists) {
     await docker(["start", extra.container])
+    DockerRuntime.scheduleIdleStop(extra)
     return
   }
 
   await startContainer(extra, undefined)
+  DockerRuntime.scheduleIdleStop(extra)
 }
 
 export const DockerAdapter: WorkspaceAdapter = {
@@ -230,6 +240,7 @@ export const DockerAdapter: WorkspaceAdapter = {
     const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
     if (!extra) throw new Error("Docker workspace metadata is missing")
 
+    DockerRuntime.clearIdleStop(extra)
     await removeContainer(extra.container)
     await fs.rm(path.dirname(extra.hostDirectory), { recursive: true, force: true })
   },

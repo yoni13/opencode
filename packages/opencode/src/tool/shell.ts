@@ -572,9 +572,9 @@ export const ShellTool = Tool.define(
                   return trunc.write(full).pipe(
                     Effect.andThen((next) =>
                       Effect.sync(() => {
-                        file = next
+                        file = next.displayPath
                         cut = true
-                        sink = createWriteStream(next, { flags: "a" })
+                        sink = createWriteStream(next.path, { flags: "a" })
                         full = ""
                       }),
                     ),
@@ -638,7 +638,7 @@ export const ShellTool = Tool.define(
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
       if (!file && end.cut) {
-        file = yield* trunc.write(raw)
+        file = (yield* trunc.write(raw)).displayPath
       }
 
       let output = end.text

@@ -6,6 +6,7 @@ import fuzzysort from "fuzzysort"
 import ignore from "ignore"
 import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
 import { EventV2 } from "./event"
+import { DockerRuntime } from "./docker-runtime"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { Location } from "./location"
@@ -239,6 +240,7 @@ export const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const location = yield* Location.Service
     const global = yield* Effect.serviceOption(Global.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
     const references = yield* ProjectReference.Service
     const ripgrep = yield* Ripgrep.Service
     const root = yield* fs.realPath(location.directory).pipe(Effect.orDie)
@@ -266,6 +268,29 @@ export const layer = Layer.effect(
       )
       if (input && path.isAbsolute(input)) {
         if (reference) return yield* Effect.die(new Error("Absolute paths cannot use a project reference"))
+        const runtime =
+          Option.isSome(docker) && location.workspaceID
+            ? yield* docker.value.resolve(location.workspaceID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+            : undefined
+        const dockerManaged = runtime
+          ? path.posix.join(runtime.workspacePath, ToolOutputStore.MANAGED_DIRECTORY)
+          : undefined
+        const normalized = input.split(path.sep).join(path.posix.sep)
+        if (
+          runtime &&
+          dockerManaged &&
+          path.posix.dirname(normalized) === dockerManaged &&
+          path.posix.basename(normalized).startsWith("tool_")
+        ) {
+          const host = DockerRuntime.hostPath(runtime, normalized)
+          const real = yield* fs.realPath(host).pipe(Effect.orDie)
+          const managedRoot = yield* fs
+            .realPath(path.join(runtime.hostDirectory, ToolOutputStore.MANAGED_DIRECTORY))
+            .pipe(Effect.orDie)
+          if (path.dirname(real) !== managedRoot || !path.basename(real).startsWith("tool_"))
+            return yield* Effect.die(new Error("Path escapes managed tool output"))
+          return { absolute: host, real, directory: managedRoot, root: managedRoot }
+        }
         if (path.dirname(input) !== managed || !path.basename(input).startsWith("tool_"))
           return yield* Effect.die(new Error("Absolute path is not managed tool output"))
         const real = yield* fs.realPath(input).pipe(Effect.orDie)

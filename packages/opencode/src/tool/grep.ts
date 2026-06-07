@@ -59,19 +59,20 @@ export const GrepTool = Tool.define(
           const requested = path.isAbsolute(params.path ?? ins.directory)
             ? (params.path ?? ins.directory)
             : path.join(ins.directory, params.path ?? ".")
-          yield* reference.ensure(requested)
-          const requestedInfo = yield* fs.stat(requested).pipe(Effect.catch(() => Effect.succeed(undefined)))
-          yield* assertExternalDirectoryEffect(ctx, requested, {
-            bypass: yield* reference.contains(requested),
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+          const hostRequested = runtime ? DockerRuntime.hostPath(runtime, requested) : requested
+          yield* reference.ensure(hostRequested)
+          const requestedInfo = yield* fs.stat(hostRequested).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          yield* assertExternalDirectoryEffect(ctx, hostRequested, {
+            bypass: yield* reference.contains(hostRequested),
             kind: requestedInfo?.type === "Directory" ? "directory" : "file",
           })
 
-          const search = FSUtil.resolve(requested)
+          const search = FSUtil.resolve(hostRequested)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           const cwd = info?.type === "Directory" ? search : path.dirname(search)
           const file = info?.type === "Directory" ? undefined : [path.relative(cwd, search)]
-          const runtime =
-            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
           if (runtime) {
             const containerCwd = DockerRuntime.containerPath(runtime, cwd)
             const result = yield* DockerRuntime.run({

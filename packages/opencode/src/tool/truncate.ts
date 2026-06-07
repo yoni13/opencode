@@ -2,9 +2,11 @@ import { NodePath } from "@effect/platform-node"
 import { Cause, Duration, Effect, Layer, Option, Schedule, Context } from "effect"
 import path from "path"
 import type { Agent } from "../agent/agent"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { evaluate } from "@/permission/evaluate"
 import { Config } from "@/config/config"
+import { InstanceState } from "@/effect/instance-state"
 import { Identifier } from "../id/id"
 import * as Log from "@opencode-ai/core/util/log"
 import { ToolID } from "./schema"
@@ -19,6 +21,7 @@ export const DIR = TRUNCATION_DIR
 export const GLOB = path.join(TRUNCATION_DIR, "*")
 
 export type Result = { content: string; truncated: false } | { content: string; truncated: true; outputPath: string }
+export type WriteResult = { path: string; displayPath: string }
 
 export interface Options {
   maxLines?: number
@@ -33,7 +36,7 @@ function hasTaskTool(agent?: Agent.Info) {
 
 export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
-  readonly write: (text: string) => Effect.Effect<string>
+  readonly write: (text: string) => Effect.Effect<WriteResult>
   /**
    * Returns output unchanged when it fits within the limits, otherwise writes the full text
    * to the truncation directory and returns a preview plus a hint to inspect the saved file.
@@ -51,6 +54,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
 
     const cleanup = Effect.fn("Truncate.cleanup")(function* () {
       const cutoff = Identifier.timestamp(
@@ -66,11 +70,30 @@ export const layer = Layer.effect(
       }
     })
 
+    const target = Effect.fn("Truncate.target")(function* () {
+      const workspaceID = yield* InstanceState.workspaceID.pipe(Effect.catch(() => Effect.succeed(undefined)))
+      const runtime =
+        workspaceID && Option.isSome(docker)
+          ? yield* docker.value.resolve(workspaceID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+      if (!runtime) return { directory: TRUNCATION_DIR, displayDirectory: TRUNCATION_DIR }
+      return {
+        directory: path.join(runtime.hostDirectory, "tool-output"),
+        displayDirectory: path.posix.join(runtime.workspacePath, "tool-output"),
+      }
+    })
+
     const write = Effect.fn("Truncate.write")(function* (text: string) {
-      const file = path.join(TRUNCATION_DIR, ToolID.ascending())
-      yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
+      const output = yield* target()
+      const name = ToolID.ascending()
+      const file = path.join(output.directory, name)
+      yield* fs.ensureDir(output.directory).pipe(Effect.orDie)
       yield* fs.writeFileString(file, text).pipe(Effect.orDie)
-      return file
+      return {
+        path: file,
+        displayPath:
+          output.displayDirectory === output.directory ? file : path.posix.join(output.displayDirectory, name),
+      }
     })
 
     const limits = Effect.fn("Truncate.limits")(function* () {
@@ -128,8 +151,8 @@ export const layer = Layer.effect(
       const file = yield* write(text)
 
       const hint = hasTaskTool(agent)
-        ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
-        : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+        ? `The tool call succeeded but the output was truncated. Full output saved to: ${file.displayPath}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
+        : `The tool call succeeded but the output was truncated. Full output saved to: ${file.displayPath}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
 
       return {
         content:
@@ -137,7 +160,7 @@ export const layer = Layer.effect(
             ? `${preview}\n\n...${removed} ${unit} truncated...\n\n${hint}`
             : `...${removed} ${unit} truncated...\n\n${hint}\n\n${preview}`,
         truncated: true,
-        outputPath: file,
+        outputPath: file.displayPath,
       } as const
     })
 

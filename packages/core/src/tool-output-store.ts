@@ -3,8 +3,10 @@ export * as ToolOutputStore from "./tool-output-store"
 import path from "path"
 import { Context, Duration, Effect, Layer, Option, Schedule } from "effect"
 import { Config } from "./config"
+import { DockerRuntime } from "./docker-runtime"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
+import { Location } from "./location"
 import { SessionSchema } from "./session/schema"
 import { Identifier } from "./util/identifier"
 import type { ToolOutput } from "@opencode-ai/llm"
@@ -115,7 +117,21 @@ export const layer = Layer.effect(
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const config = yield* Effect.serviceOption(Config.Service)
+    const location = yield* Effect.serviceOption(Location.Service)
+    const docker = yield* Effect.serviceOption(DockerRuntime.Service)
     const directory = path.join(global.data, MANAGED_DIRECTORY)
+
+    const target = Effect.fn("ToolOutputStore.target")(function* () {
+      const runtime =
+        Option.isSome(location) && Option.isSome(docker)
+          ? yield* docker.value.resolve(location.value.workspaceID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+      if (!runtime) return { directory, displayDirectory: directory }
+      return {
+        directory: path.join(runtime.hostDirectory, MANAGED_DIRECTORY),
+        displayDirectory: path.posix.join(runtime.workspacePath, MANAGED_DIRECTORY),
+      }
+    })
 
     const limits = Effect.fn("ToolOutputStore.limits")(function* () {
       if (Option.isNone(config)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES }
@@ -128,10 +144,12 @@ export const layer = Layer.effect(
     })
 
     const write = Effect.fn("ToolOutputStore.write")(function* (input: WriteInput) {
-      const file = path.join(directory, `tool_${Identifier.ascending()}`)
-      yield* fs.ensureDir(directory).pipe(Effect.orDie)
+      const output = yield* target()
+      const name = `tool_${Identifier.ascending()}`
+      const file = path.join(output.directory, name)
+      yield* fs.ensureDir(output.directory).pipe(Effect.orDie)
       yield* fs.writeFileString(file, input.content, { flag: "wx" }).pipe(Effect.orDie)
-      return file
+      return output.displayDirectory === output.directory ? file : path.posix.join(output.displayDirectory, name)
     })
 
     const truncate = Effect.fn("ToolOutputStore.truncate")(function* (input: TruncateInput) {

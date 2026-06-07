@@ -44,6 +44,9 @@ export const GlobTool = Tool.define(
 
           let search = params.path ?? ins.directory
           search = path.isAbsolute(search) ? search : path.resolve(ins.directory, search)
+          const runtime =
+            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+          search = runtime ? DockerRuntime.hostPath(runtime, search) : search
           yield* reference.ensure(search)
           const info = yield* fs.stat(search).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (info?.type === "File") {
@@ -55,8 +58,6 @@ export const GlobTool = Tool.define(
           })
 
           const limit = 100
-          const runtime =
-            docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
           if (runtime) {
             const containerSearch = DockerRuntime.containerPath(runtime, search)
             const pattern = DockerFiles.globToRegExp(params.pattern)

@@ -243,32 +243,33 @@ export const ReadTool = Tool.define<
       if (process.platform === "win32") {
         filepath = FSUtil.normalizePath(filepath)
       }
-      yield* reference.ensure(filepath)
-      const title = path.relative(instance.worktree, filepath)
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      const hostFilepath = runtime ? DockerRuntime.hostPath(runtime, filepath) : filepath
+      yield* reference.ensure(hostFilepath)
+      const title = path.relative(instance.worktree, hostFilepath)
 
-      const stat = yield* fs.stat(filepath).pipe(
+      const stat = yield* fs.stat(hostFilepath).pipe(
         Effect.catchIf(
           (err) => "reason" in err && err.reason._tag === "NotFound",
           () => Effect.succeed(undefined),
         ),
       )
 
-      yield* assertExternalDirectoryEffect(ctx, filepath, {
-        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]) || (yield* reference.contains(filepath)),
+      yield* assertExternalDirectoryEffect(ctx, hostFilepath, {
+        bypass: Boolean(ctx.extra?.["bypassCwdCheck"]) || (yield* reference.contains(hostFilepath)),
         kind: stat?.type === "Directory" ? "directory" : "file",
       })
 
       yield* ctx.ask({
         permission: "read",
-        patterns: [path.relative(instance.worktree, filepath)],
+        patterns: [path.relative(instance.worktree, hostFilepath)],
         always: ["*"],
         metadata: {},
       })
 
       if (!stat) return yield* miss(filepath)
-      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
       if (runtime) {
-        const containerFilepath = DockerRuntime.containerPath(runtime, filepath)
+        const containerFilepath = DockerRuntime.containerPath(runtime, hostFilepath)
         const kind = yield* DockerFiles.stat(runtime, containerFilepath)
         if (kind === "directory") {
           const entries = (yield* DockerFiles.list(runtime, containerFilepath)).map((item) =>

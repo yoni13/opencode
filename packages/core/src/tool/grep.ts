@@ -10,6 +10,7 @@ import { Ripgrep } from "../ripgrep"
 import { RelativePath } from "../schema"
 import { ToolRegistry } from "./registry"
 import { DockerFiles } from "../docker-files"
+import path from "node:path"
 
 export const name = "grep"
 
@@ -102,6 +103,8 @@ export const layer = Layer.effectDiscard(
                 : undefined
             if (runtime) {
               const directory = DockerFiles.resolvePath(runtime, currentLocation!.directory, parameters.path ?? ".")
+              const cwd = root.type === "file" ? path.posix.dirname(directory) : directory
+              const files = root.type === "file" ? [path.posix.basename(directory)] : ["."]
               const limit = parameters.limit ?? LocationSearch.DEFAULT_RESULT_LIMIT
               const result = yield* DockerRuntime.run({
                 runtime,
@@ -112,9 +115,9 @@ export const layer = Layer.effectDiscard(
                   ...(parameters.include ? [`--include=${parameters.include}`] : []),
                   "--",
                   parameters.pattern,
-                  ".",
+                  ...files,
                 ],
-                cwd: directory,
+                cwd,
                 maxOutputBytes: 1024 * 1024,
                 maxErrorBytes: 8 * 1024,
               })
@@ -138,7 +141,7 @@ export const layer = Layer.effectDiscard(
                   return [
                     new LocationSearch.Match({
                       path: RelativePath.make(resource),
-                      canonical: `${directory}/${resource}`,
+                      canonical: `${cwd}/${resource}`,
                       resource,
                       lines: lines.slice(0, LocationSearch.MAX_LINE_PREVIEW_LENGTH),
                       linePreviewTruncated: lines.length > LocationSearch.MAX_LINE_PREVIEW_LENGTH,
