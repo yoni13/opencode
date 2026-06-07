@@ -4,10 +4,12 @@ import * as Log from "@opencode-ai/core/util/log"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
 import os from "os"
+import path from "path"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { Global } from "@opencode-ai/core/global"
 
 const log = Log.create({ service: "permission" })
 
@@ -49,6 +51,13 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
       pattern: "*",
     }
   )
+}
+
+export function isManagedDockerWorkspaceDirectory(directory: string) {
+  const relative = path.relative(path.join(Global.Path.data, "docker-workspace"), path.resolve(directory))
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false
+  const parts = relative.split(path.sep).filter(Boolean)
+  return parts[0]?.startsWith("wrk") === true && parts[1] === "workspace"
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}
@@ -97,8 +106,15 @@ export const layer = Layer.effect(
 
       if (!needsAsk) return
       const docker = yield* Effect.serviceOption(DockerRuntime.Service)
-      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      const ctx = yield* InstanceState.context
+      const runtime =
+        docker._tag === "Some"
+          ? yield* docker.value
+              .resolve(yield* InstanceState.workspaceID)
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
       if (runtime) return
+      if (isManagedDockerWorkspaceDirectory(ctx.directory)) return
 
       const id = request.id ?? PermissionV1.ID.ascending()
       const info: PermissionV1.Request = {

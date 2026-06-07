@@ -1,12 +1,10 @@
-FROM ubuntu:24.04
+FROM debian:13-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_VERSION=22.16.0
-ARG BUN_VERSION=1.3.14
 
-ENV BUN_INSTALL=/opt/bun
 ENV UV_INSTALL_DIR=/usr/local/bin
-ENV PATH=/opt/bun/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV npm_config_update_notifier=false
 
@@ -17,16 +15,26 @@ RUN apt-get update \
     ca-certificates \
     curl \
     fd-find \
+    file \
     git \
     jq \
+    less \
+    lsof \
+    netcat-openbsd \
     openssh-client \
     pipx \
     pkg-config \
+    procps \
+    psmisc \
+    python-is-python3 \
     python3 \
     python3-pip \
     python3-venv \
     ripgrep \
+    rsync \
+    tree \
     unzip \
+    wget \
     xz-utils \
     zip \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
@@ -44,14 +52,10 @@ RUN set -eux; \
   npx --version
 
 RUN set -eux; \
-  curl -fsSL https://bun.sh/install | bash -s -- "bun-v${BUN_VERSION}"; \
-  bun --version; \
-  bunx --version
-
-RUN set -eux; \
   curl -LsSf https://astral.sh/uv/install.sh | sh; \
   uv --version; \
   uvx --version; \
+  python --version; \
   python3 --version; \
   pipx --version
 
