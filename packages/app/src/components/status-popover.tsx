@@ -6,8 +6,8 @@ import { Popover } from "@opencode-ai/ui/popover"
 import { Suspense, createMemo, createSignal, lazy, Show, type JSX } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useServer } from "@/context/server"
-import { useSync } from "@/context/sync"
 import { useGlobal } from "@/context/global"
+import { useMcpStatus } from "./use-mcp-status"
 
 const Body = lazy(() => import("./status-popover-body").then((x) => ({ default: x.StatusPopoverBody })))
 const ServerBody = lazy(() => import("./status-popover-body").then((x) => ({ default: x.StatusPopoverServerBody })))
@@ -16,13 +16,13 @@ export function StatusPopover() {
   const language = useLanguage()
   const server = useServer()
   const global = useGlobal()
-  const sync = useSync()
+  const mcp = useMcpStatus()
   const [shown, setShown] = createSignal(false)
-  const ready = createMemo(() => global.servers.health[server.key]?.healthy === false || sync.data.mcp_ready)
+  const ready = createMemo(() => global.servers.health[server.key]?.healthy === false || mcp.ready())
   const mcpIssue = createMemo(() => {
-    const mcp = Object.values(sync.data.mcp ?? {})
-    const failed = mcp.some((item) => item.status === "failed" || item.status === "needs_client_registration")
-    const warn = mcp.some((item) => item.status === "needs_auth")
+    const status = Object.values(mcp.data())
+    const failed = status.some((item) => item.status === "failed" || item.status === "needs_client_registration")
+    const warn = status.some((item) => item.status === "needs_auth")
     if (failed) return "critical" as const
     if (warn) return "warning" as const
   })
@@ -83,14 +83,14 @@ function DirectoryStatusPopover() {
   const language = useLanguage()
   const server = useServer()
   const global = useGlobal()
-  const sync = useSync()
+  const mcp = useMcpStatus()
   const [shown, setShown] = createSignal(false)
   const serverHealth = () => global.servers.health[server.key]?.healthy
-  const ready = createMemo(() => serverHealth() === false || sync.data.mcp_ready)
+  const ready = createMemo(() => serverHealth() === false || mcp.ready())
   const mcpIssue = createMemo(() => {
-    const mcp = Object.values(sync.data.mcp ?? {})
-    const failed = mcp.some((item) => item.status === "failed" || item.status === "needs_client_registration")
-    const warn = mcp.some((item) => item.status === "needs_auth")
+    const status = Object.values(mcp.data())
+    const failed = status.some((item) => item.status === "failed" || item.status === "needs_client_registration")
+    const warn = status.some((item) => item.status === "needs_auth")
     if (failed) return "critical" as const
     if (warn) return "warning" as const
   })

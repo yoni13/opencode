@@ -144,10 +144,13 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
   let bootingRoot = false
   let eventFrame: number | undefined
   let eventTimer: ReturnType<typeof setTimeout> | undefined
+  const statusRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   onCleanup(() => {
     if (eventFrame !== undefined) cancelAnimationFrame(eventFrame)
     if (eventTimer !== undefined) clearTimeout(eventTimer)
+    for (const timer of statusRefreshTimers.values()) clearTimeout(timer)
+    statusRefreshTimers.clear()
   })
 
   const setProjects = (next: Project[] | ((draft: Project[]) => Project[])) => {
@@ -246,6 +249,37 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
       provider: globalStore.provider,
     },
   })
+
+  const hasActiveStatus = (directory: string) => {
+    const child = children.children[directoryKey(directory)]
+    if (!child) return false
+    return Object.values(child[0].session_status).some((status) => status.type !== "idle")
+  }
+
+  const scheduleStatusRefresh = (directory: string) => {
+    const key = directoryKey(directory)
+    if (statusRefreshTimers.has(key)) return
+    if (!hasActiveStatus(directory)) return
+
+    statusRefreshTimers.set(
+      key,
+      setTimeout(() => {
+        statusRefreshTimers.delete(key)
+        if (!hasActiveStatus(directory)) return
+
+        void retry(() => sdkFor(directory).session.status())
+          .then((response) => {
+            const child = children.children[key]
+            if (!child) return
+            child[1]("session_status", reconcile(response.data ?? {}, { merge: false }))
+            if (hasActiveStatus(directory)) scheduleStatusRefresh(directory)
+          })
+          .catch(() => {
+            if (hasActiveStatus(directory)) scheduleStatusRefresh(directory)
+          })
+      }, 2500),
+    )
+  }
 
   async function loadSessions(directory: string, options?: { limit?: number }) {
     const key = directoryKey(directory)
@@ -410,6 +444,7 @@ export function createServerSyncContextInner(_serverSDK?: ServerSDK) {
         void queryClient.fetchQuery(queryOptionsApi.lsp(key))
       },
     })
+    scheduleStatusRefresh(directory)
   })
 
   onCleanup(unsub)
