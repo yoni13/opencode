@@ -835,7 +835,9 @@ export const layer = Layer.effect(
             return yield* uploadRelative(index + 1)
           })
         const relative = yield* uploadRelative(0)
-        const displayPath = relative.split(path.sep).join("/")
+        const displayPath = runtime
+          ? DockerFiles.resolvePath(runtime, ctx.directory, relative)
+          : relative.split(path.sep).join("/")
         const filepath = path.join(ctx.directory, relative)
 
         if (runtime)
@@ -1079,10 +1081,13 @@ export const layer = Layer.effect(
 
               if (!modelSupportsFilePart(mime, selectedModel)) {
                 const ctx = yield* InstanceState.context
+                const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
                 const relative = path.relative(ctx.directory, filepath)
                 const displayPath =
                   relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-                    ? relative.split(path.sep).join("/")
+                    ? runtime
+                      ? DockerFiles.resolvePath(runtime, ctx.directory, relative)
+                      : relative.split(path.sep).join("/")
                     : filepath
                 return [
                   {
