@@ -33,6 +33,8 @@ import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
 import { Config } from "@/config/config"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import { decodeDockerWorkspaceExtra } from "./docker-workspace"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -153,6 +155,7 @@ export interface Interface {
   readonly list: (project: Project.Info) => Effect.Effect<Info[]>
   readonly syncList: (project: Project.Info) => Effect.Effect<void>
   readonly get: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
+  readonly update: (id: WorkspaceV2.ID, input: { extra?: Info["extra"] }) => Effect.Effect<Info | undefined>
   readonly remove: (id: WorkspaceV2.ID) => Effect.Effect<Info | undefined>
   readonly status: () => Effect.Effect<ConnectionStatus[]>
   readonly isSyncing: (workspaceID: WorkspaceV2.ID) => Effect.Effect<boolean>
@@ -537,8 +540,7 @@ export const layer = Layer.effect(
       const configSvc = yield* Effect.serviceOption(Config.Service)
       const defaultDirectory =
         configSvc._tag === "Some" ? (yield* configSvc.value.get()).workspace?.default_directory : undefined
-      const sourceDirectory =
-        input.directory !== undefined ? input.directory : (defaultDirectory ?? null)
+      const sourceDirectory = input.directory !== undefined ? input.directory : (defaultDirectory ?? null)
       const config = yield* WorkspaceAdapterRuntime.configure(
         adapter,
         {
@@ -957,12 +959,31 @@ export const layer = Layer.effect(
         () =>
           Effect.sync(() => {
             log.error("adapter not available when removing workspace", { type: row.type })
-        }),
+          }),
       )
 
       if (info.directory)
         yield* project.removeSandbox(info.projectID, info.directory).pipe(Effect.catchCause(() => Effect.void))
       yield* db.delete(WorkspaceTable).where(eq(WorkspaceTable.id, id)).run().pipe(Effect.orDie)
+      return info
+    })
+
+    const update = Effect.fn("Workspace.update")(function* (id: WorkspaceV2.ID, input: { extra?: Info["extra"] }) {
+      const row = yield* db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, id)).get().pipe(Effect.orDie)
+      if (!row) return
+      if (input.extra === undefined) return fromRow(row)
+      yield* db
+        .update(WorkspaceTable)
+        .set({
+          extra: input.extra,
+        })
+        .where(eq(WorkspaceTable.id, id))
+        .run()
+        .pipe(Effect.orDie)
+      const info = yield* get(id)
+      const extra = decodeDockerWorkspaceExtra(info?.extra).valueOrUndefined
+      if (extra?.idleStopDisabled) DockerRuntime.clearIdleStop(extra)
+      else if (extra) DockerRuntime.scheduleIdleStop(extra)
       return info
     })
 
@@ -1032,6 +1053,7 @@ export const layer = Layer.effect(
       list,
       syncList,
       get,
+      update,
       remove,
       status,
       isSyncing,

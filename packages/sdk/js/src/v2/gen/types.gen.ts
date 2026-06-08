@@ -9381,6 +9381,40 @@ export type ExperimentalWorkspaceRemoveResponses = {
 export type ExperimentalWorkspaceRemoveResponse =
   ExperimentalWorkspaceRemoveResponses[keyof ExperimentalWorkspaceRemoveResponses]
 
+export type ExperimentalWorkspaceUpdateData = {
+  body?: {
+    extra?: unknown
+  }
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/{id}"
+}
+
+export type ExperimentalWorkspaceUpdateErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type ExperimentalWorkspaceUpdateError =
+  ExperimentalWorkspaceUpdateErrors[keyof ExperimentalWorkspaceUpdateErrors]
+
+export type ExperimentalWorkspaceUpdateResponses = {
+  /**
+   * Workspace updated
+   */
+  200: Workspace
+}
+
+export type ExperimentalWorkspaceUpdateResponse =
+  ExperimentalWorkspaceUpdateResponses[keyof ExperimentalWorkspaceUpdateResponses]
+
 export type ExperimentalWorkspaceWarpData = {
   body?: {
     id: string | null

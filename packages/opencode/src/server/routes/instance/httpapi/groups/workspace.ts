@@ -11,6 +11,9 @@ import { described } from "./metadata"
 
 const root = "/experimental/workspace"
 export const CreatePayload = Schema.Struct(Struct.omit(Workspace.CreateInput.fields, ["projectID"]))
+export const UpdatePayload = Schema.Struct({
+  extra: Schema.optional(Workspace.Info.fields.extra),
+})
 export const WarpPayload = Schema.Struct({
   id: Schema.NullOr(Workspace.Info.fields.id),
   sessionID: Workspace.SessionWarpInput.fields.sessionID,
@@ -43,6 +46,7 @@ export const WorkspacePaths = {
   syncList: `${root}/sync-list`,
   status: `${root}/status`,
   remove: `${root}/:id`,
+  update: `${root}/:id`,
   warp: `${root}/warp`,
 } as const
 
@@ -112,6 +116,19 @@ export const WorkspaceApi = HttpApi.make("workspace")
             identifier: "experimental.workspace.remove",
             summary: "Remove workspace",
             description: "Remove an existing workspace.",
+          }),
+        ),
+        HttpApiEndpoint.patch("update", WorkspacePaths.update, {
+          params: { id: Workspace.Info.fields.id },
+          query: WorkspaceRoutingQuery,
+          payload: UpdatePayload,
+          success: described(Schema.UndefinedOr(Workspace.Info), "Workspace updated"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workspace.update",
+            summary: "Update workspace",
+            description: "Update workspace metadata.",
           }),
         ),
         HttpApiEndpoint.post("warp", WorkspacePaths.warp, {

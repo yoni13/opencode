@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { dockerContainerName } from "./docker"
+import { dockerContainerName, dockerIdleStopDisabled } from "./docker"
 
 describe("dockerContainerName", () => {
   test("returns the Docker container name", () => {
@@ -10,5 +10,12 @@ describe("dockerContainerName", () => {
     expect(dockerContainerName({ kind: "local", container: "host" })).toBeUndefined()
     expect(dockerContainerName({ kind: "docker", container: 123 })).toBeUndefined()
     expect(dockerContainerName(null)).toBeUndefined()
+  })
+
+  test("returns whether Docker idle stop is disabled", () => {
+    expect(dockerIdleStopDisabled({ kind: "docker", idleStopDisabled: true })).toBe(true)
+    expect(dockerIdleStopDisabled({ kind: "docker", idleStopDisabled: false })).toBe(false)
+    expect(dockerIdleStopDisabled({ kind: "docker" })).toBe(false)
+    expect(dockerIdleStopDisabled({ kind: "local", idleStopDisabled: true })).toBe(false)
   })
 })

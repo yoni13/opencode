@@ -389,6 +389,7 @@ describe("HttpApi workspace routing middleware", () => {
               : undefined,
           ),
         remove: () => Effect.die("unused"),
+        update: () => Effect.die("unused"),
         status: () => Effect.die("unused"),
         isSyncing: () => Effect.succeed(true),
         waitForSync: (id, state) => Ref.set(waited, { workspaceID: id, state }),

@@ -29,7 +29,7 @@ import { Persist, persisted } from "@/utils/persist"
 import { StatusPopover, StatusPopoverV2 } from "../status-popover"
 import { IconButtonV2 } from "@opencode-ai/ui/v2/icon-button-v2"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
-import { dockerContainerName } from "./docker"
+import { dockerContainerName, dockerIdleStopDisabled } from "./docker"
 
 const OPEN_APPS = [
   "vscode",
@@ -162,11 +162,18 @@ export function SessionHeader() {
         .then((result) => result.data ?? [])
         .catch(() => []),
   }))
-  const containerName = createMemo(() => {
+  const workspaceInfo = createMemo(() => {
     const workspaceID = session()?.workspaceID
     if (!workspaceID) return
-    return dockerContainerName(workspaceQuery.data?.find((workspace) => workspace.id === workspaceID)?.extra)
+    return workspaceQuery.data?.find((workspace) => workspace.id === workspaceID)
   })
+  const containerName = createMemo(() => {
+    return dockerContainerName(workspaceInfo()?.extra)
+  })
+  const idleStopDisabled = createMemo(() => dockerIdleStopDisabled(workspaceInfo()?.extra))
+  const idleStopLabel = createMemo(() =>
+    idleStopDisabled() ? "Docker auto-stop disabled" : "Disable Docker auto-stop",
+  )
   const name = createMemo(() => {
     const current = project()
     if (current) return current.name || getFilename(current.worktree)
@@ -240,6 +247,7 @@ export function SessionHeader() {
   const [openRequest, setOpenRequest] = createStore({
     app: undefined as OpenApp | undefined,
   })
+  const [dockerIdleStopBusy, setDockerIdleStopBusy] = createSignal(false)
 
   const canOpen = createMemo(() => platform.platform === "desktop" && !!platform.openPath && server.isLocal())
   const current = createMemo(
@@ -252,8 +260,39 @@ export function SessionHeader() {
   const tint = createMemo(() =>
     messageAgentColor(params.id ? sync.data.message[params.id] : undefined, sync.data.agent),
   )
+
+  const selectApp = (app: OpenApp) => {
+    if (!options().some((item) => item.id === app)) return
+    setPrefs("app", app)
+  }
+
+  const toggleDockerIdleStop = () => {
+    const workspace = workspaceInfo()
+    if (!workspace || dockerIdleStopBusy()) return
+    const extra = workspace.extra
+    if (!extra || typeof extra !== "object" || Array.isArray(extra)) return
+    const next = !idleStopDisabled()
+
+    setDockerIdleStopBusy(true)
+    sdk.client.experimental.workspace
+      .update({
+        id: workspace.id,
+        extra: {
+          ...(extra as Record<string, unknown>),
+          idleStopDisabled: next,
+        },
+      })
+      .then(() => workspaceQuery.refetch())
+      .catch((err: unknown) => showRequestError(language, err))
+      .finally(() => setDockerIdleStopBusy(false))
+  }
+
   const v2ActionsState = createMemo<SessionHeaderV2ActionsState>(() => ({
     container: containerName(),
+    dockerIdleStopDisabled: idleStopDisabled(),
+    dockerIdleStopBusy: dockerIdleStopBusy(),
+    dockerIdleStopLabel: idleStopLabel(),
+    onDockerIdleStopToggle: toggleDockerIdleStop,
     statusVisible: status(),
     statusLabel: language.t("status.popover.trigger"),
     reviewLabel: language.t("command.review.toggle"),
@@ -261,11 +300,6 @@ export function SessionHeader() {
     reviewOpened: view().reviewPanel.opened(),
     onReviewToggle: () => view().reviewPanel.toggle(),
   }))
-
-  const selectApp = (app: OpenApp) => {
-    if (!options().some((item) => item.id === app)) return
-    setPrefs("app", app)
-  }
 
   const openDir = (app: OpenApp) => {
     if (opening() || !canOpen() || !platform.openPath) return
@@ -345,7 +379,19 @@ export function SessionHeader() {
               when={isDesktopV2}
               fallback={
                 <div class="flex items-center gap-2">
-                  <Show when={containerName()}>{(container) => <DockerContainerBadge name={container()} />}</Show>
+                  <Show when={containerName()}>
+                    {(container) => (
+                      <>
+                        <DockerContainerBadge name={container()} />
+                        <DockerIdleStopButton
+                          active={idleStopDisabled()}
+                          busy={dockerIdleStopBusy()}
+                          label={idleStopLabel()}
+                          onClick={toggleDockerIdleStop}
+                        />
+                      </>
+                    )}
+                  </Show>
                   <Show when={projectDirectory()}>
                     <div class="hidden xl:flex items-center">
                       <Show
@@ -542,6 +588,10 @@ export function SessionHeader() {
 
 type SessionHeaderV2ActionsState = {
   container?: string
+  dockerIdleStopDisabled: boolean
+  dockerIdleStopBusy: boolean
+  dockerIdleStopLabel: string
+  onDockerIdleStopToggle: () => void
   statusVisible: boolean
   statusLabel: string
   reviewLabel: string
@@ -553,7 +603,19 @@ type SessionHeaderV2ActionsState = {
 function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
   return (
     <div class="flex items-center gap-2">
-      <Show when={props.state.container}>{(container) => <DockerContainerBadge name={container()} />}</Show>
+      <Show when={props.state.container}>
+        {(container) => (
+          <>
+            <DockerContainerBadge name={container()} />
+            <DockerIdleStopButtonV2
+              active={props.state.dockerIdleStopDisabled}
+              busy={props.state.dockerIdleStopBusy}
+              label={props.state.dockerIdleStopLabel}
+              onClick={props.state.onDockerIdleStopToggle}
+            />
+          </>
+        )}
+      </Show>
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />
@@ -574,6 +636,48 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
         />
       </TooltipKeybind>
     </div>
+  )
+}
+
+function DockerIdleStopButton(props: { active: boolean; busy: boolean; label: string; onClick: () => void }) {
+  return (
+    <Tooltip placement="bottom" value={props.label}>
+      <Button
+        type="button"
+        variant="ghost"
+        class="titlebar-icon h-6 w-8 shrink-0 p-0"
+        classList={{
+          "bg-surface-raised-base-active": props.active,
+        }}
+        disabled={props.busy}
+        onClick={props.onClick}
+        aria-label={props.label}
+        aria-pressed={props.active}
+      >
+        <Show when={props.busy} fallback={<Icon name="server" size="small" />}>
+          <Spinner class="size-3.5" />
+        </Show>
+      </Button>
+    </Tooltip>
+  )
+}
+
+function DockerIdleStopButtonV2(props: { active: boolean; busy: boolean; label: string; onClick: () => void }) {
+  return (
+    <Tooltip placement="bottom" value={props.label}>
+      <IconButtonV2
+        type="button"
+        variant="ghost-muted"
+        size="large"
+        class="!w-9 shrink-0"
+        state={props.active ? "pressed" : undefined}
+        disabled={props.busy}
+        onClick={props.onClick}
+        aria-label={props.label}
+        aria-pressed={props.active}
+        icon={props.busy ? <Spinner class="size-3.5" /> : <IconV2 name={props.active ? "status-active" : "status"} />}
+      />
+    </Tooltip>
   )
 }
 

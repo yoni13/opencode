@@ -60,6 +60,8 @@ import type {
   ExperimentalWorkspaceStatusResponses,
   ExperimentalWorkspaceSyncListErrors,
   ExperimentalWorkspaceSyncListResponses,
+  ExperimentalWorkspaceUpdateErrors,
+  ExperimentalWorkspaceUpdateResponses,
   ExperimentalWorkspaceWarpErrors,
   ExperimentalWorkspaceWarpResponses,
   FileListErrors,
@@ -1166,6 +1168,49 @@ export class Workspace extends HeyApiClient {
       url: "/experimental/workspace/{id}",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Update workspace
+   *
+   * Update workspace metadata.
+   */
+  public update<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      workspace?: string
+      extra?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "extra" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      ExperimentalWorkspaceUpdateResponses,
+      ExperimentalWorkspaceUpdateErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workspace/{id}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

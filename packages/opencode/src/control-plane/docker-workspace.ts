@@ -13,6 +13,7 @@ export const DockerWorkspaceExtra = Schema.Struct({
   workspacePath: Schema.String,
   configDirectory: Schema.String,
   createdAt: Schema.Number,
+  idleStopDisabled: Schema.optional(Schema.Boolean),
 })
 export type DockerWorkspaceExtra = Schema.Schema.Type<typeof DockerWorkspaceExtra>
 

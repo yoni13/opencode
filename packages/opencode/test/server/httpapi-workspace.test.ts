@@ -308,6 +308,34 @@ describe("workspace HttpApi", () => {
     }),
   )
 
+  it.live("updates workspace metadata", () =>
+    Effect.gen(function* () {
+      Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = true
+      const dir = yield* tmpdirScoped({ git: true })
+      const project = yield* Project.use.fromDirectory(dir)
+      registerAdapter(project.project.id, "local-update", localAdapter(path.join(dir, ".workspace-update")))
+
+      const created = yield* request(WorkspacePaths.list, dir, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "local-update", branch: null, extra: { keep: "old" } }),
+      })
+      const workspace = (yield* created.json) as Workspace.Info
+
+      const updated = yield* request(WorkspacePaths.update.replace(":id", workspace.id), dir, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ extra: { keep: "new", idleStopDisabled: true } }),
+      })
+
+      expect(updated.status).toBe(200)
+      expect((yield* updated.json) as Workspace.Info).toMatchObject({
+        id: workspace.id,
+        extra: { keep: "new", idleStopDisabled: true },
+      })
+    }),
+  )
+
   it.live("creates a real git worktree workspace via the builtin adapter", () =>
     Effect.gen(function* () {
       Flag.OPENCODE_EXPERIMENTAL_WORKSPACES = true

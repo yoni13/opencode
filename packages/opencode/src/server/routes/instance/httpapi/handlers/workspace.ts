@@ -7,7 +7,13 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 import { notFound } from "../errors"
 import { ApiVcsApplyError } from "../groups/instance"
-import { ApiWorkspaceCreateError, ApiWorkspaceWarpError, CreatePayload, WarpPayload } from "../groups/workspace"
+import {
+  ApiWorkspaceCreateError,
+  ApiWorkspaceWarpError,
+  CreatePayload,
+  UpdatePayload,
+  WarpPayload,
+} from "../groups/workspace"
 
 export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspace", (handlers) =>
   Effect.gen(function* () {
@@ -61,6 +67,13 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       return yield* workspace.remove(ctx.params.id)
     })
 
+    const update = Effect.fn("WorkspaceHttpApi.update")(function* (ctx: {
+      params: { id: Workspace.Info["id"] }
+      payload: typeof UpdatePayload.Type
+    }) {
+      return yield* workspace.update(ctx.params.id, { extra: ctx.payload.extra })
+    })
+
     const warp = Effect.fn("WorkspaceHttpApi.warp")(function* (ctx: { payload: typeof WarpPayload.Type }) {
       yield* workspace
         .sessionWarp({
@@ -97,6 +110,7 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       .handle("syncList", syncList)
       .handle("status", status)
       .handle("remove", remove)
+      .handle("update", update)
       .handle("warp", warp)
   }),
 )

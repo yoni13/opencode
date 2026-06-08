@@ -167,6 +167,7 @@ export async function assertDockerAvailable() {
         workspacePath: DOCKER_WORKSPACE_PATH,
         configDirectory: path.join(root, "config"),
         createdAt: 0,
+        idleStopDisabled: false,
       } satisfies DockerWorkspaceExtra
       const owned = await inspectContainer(extra).catch(() => undefined)
       if (!owned) continue
@@ -311,6 +312,7 @@ export const DockerAdapter: WorkspaceAdapter = {
       workspacePath: DOCKER_WORKSPACE_PATH,
       configDirectory: path.join(root, "config"),
       createdAt: Date.now(),
+      idleStopDisabled: false,
     } satisfies DockerWorkspaceExtra
     return {
       ...info,
@@ -327,10 +329,7 @@ export const DockerAdapter: WorkspaceAdapter = {
     await fs.mkdir(extra.hostDirectory, { recursive: true })
     await copyProject(source, extra.hostDirectory)
     await snapshotConfig(source, extra.configDirectory)
-    await startContainer(
-      extra,
-      extra.image.startsWith("opencode-session:") ? await setupScript(source) : undefined,
-    )
+    await startContainer(extra, extra.image.startsWith("opencode-session:") ? await setupScript(source) : undefined)
     await ensureContainer(extra)
   },
   async remove(info) {

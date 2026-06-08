@@ -25,6 +25,7 @@ export const WorkspaceExtra = Schema.Struct({
   workspacePath: Schema.String,
   configDirectory: Schema.String,
   createdAt: Schema.Number,
+  idleStopDisabled: Schema.optional(Schema.Boolean),
 })
 export type WorkspaceExtra = Schema.Schema.Type<typeof WorkspaceExtra>
 
@@ -107,6 +108,10 @@ export function clearIdleStop(runtime: WorkspaceExtra) {
 }
 
 export function scheduleIdleStop(runtime: WorkspaceExtra) {
+  if (runtime.idleStopDisabled) {
+    clearIdleStop(runtime)
+    return
+  }
   if ((activeRuns.get(runtime.container) ?? 0) > 0) return
   const existing = idleStops.get(runtime.container)
   if (existing) clearTimeout(existing)
