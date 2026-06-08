@@ -99,9 +99,22 @@ export async function refreshSessionMessages(input: {
   return messages
 }
 
+async function refreshSessionStatus(input: {
+  client: FollowupSendInput["client"]
+  serverSync: FollowupSendInput["serverSync"]
+  directory: string
+}) {
+  const status = await input.client.session.status()
+  const [, setStore] = input.serverSync.child(input.directory)
+  setStore("session_status", reconcile(status.data ?? {}, { merge: false }))
+}
+
 async function refreshPromptMessagesUntilSettled(input: Parameters<typeof refreshPromptMessages>[0]) {
   for (let attempt = 0; attempt < 60; attempt++) {
-    if (await refreshPromptMessages(input)) return
+    if (await refreshPromptMessages(input)) {
+      await refreshSessionStatus(input).catch(() => {})
+      return
+    }
     await sleep(attempt < 5 ? 500 : 1000)
   }
 }
@@ -157,6 +170,11 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         serverSync: input.serverSync,
         directory: input.draft.sessionDirectory,
         sessionID: input.draft.sessionID,
+      }).catch(() => {})
+      await refreshSessionStatus({
+        client: input.client,
+        serverSync: input.serverSync,
+        directory: input.draft.sessionDirectory,
       }).catch(() => {})
       return true
     } catch (err) {
@@ -571,6 +589,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           directory: sessionDirectory,
           sessionID: session.id,
         }).catch(() => {})
+        await refreshSessionStatus({
+          client,
+          serverSync,
+          directory: sessionDirectory,
+        }).catch(() => {})
       } catch (err) {
         showToast({
           title: language.t("prompt.toast.shellSendFailed.title"),
@@ -608,6 +631,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             serverSync,
             directory: sessionDirectory,
             sessionID: session.id,
+          }).catch(() => {})
+          await refreshSessionStatus({
+            client,
+            serverSync,
+            directory: sessionDirectory,
           }).catch(() => {})
         } catch (err) {
           showToast({
