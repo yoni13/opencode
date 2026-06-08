@@ -2,6 +2,7 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import type { Target } from "@/control-plane/types"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
+import { Config } from "@/config/config"
 import { Session } from "@/session/session"
 import { HttpApiProxy } from "./proxy"
 import * as Fence from "@/server/shared/fence"
@@ -85,8 +86,16 @@ function selectedV2WorkspaceID(
   return workspaceID.value
 }
 
-function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL): string {
-  return url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd()
+const configuredDefaultDirectory = Effect.gen(function* () {
+  const config = yield* Effect.serviceOption(Config.Service)
+  if (config._tag === "None") return process.cwd()
+  return (yield* config.value.get()).workspace?.default_directory ?? process.cwd()
+})
+
+function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL) {
+  const requested = url.searchParams.get("directory") || request.headers["x-opencode-directory"]
+  if (requested) return Effect.succeed(requested)
+  return configuredDefaultDirectory
 }
 
 function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, url: URL): boolean {
@@ -181,7 +190,7 @@ function planRequest(
     }
 
     return RequestPlan.Local({
-      directory: session?.directory || defaultDirectory(request, url),
+      directory: session?.directory || (yield* defaultDirectory(request, url)),
       workspaceID: envWorkspaceID ?? workspaceID,
     })
   })

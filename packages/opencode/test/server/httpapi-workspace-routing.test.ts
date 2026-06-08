@@ -35,6 +35,7 @@ import { resetDatabase } from "../fixture/db"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { TestConfig } from "../fixture/config"
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -260,6 +261,26 @@ const serveProbe = HttpApiBuilder.layer(ProbeApi).pipe(
 )
 
 describe("HttpApi workspace routing middleware", () => {
+  it.live("uses configured default directory when no request directory is supplied", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+
+      yield* HttpApiBuilder.layer(ProbeApi).pipe(
+        Layer.provide(probeHandlers),
+        Layer.provide(workspaceRoutingTestLayer),
+        Layer.provide(Layer.mock(Session.Service)({})),
+        Layer.provide(TestConfig.layer({ get: () => Effect.succeed({ workspace: { default_directory: dir } }) })),
+        HttpRouter.serve,
+        Layer.build,
+      )
+
+      const response = yield* HttpClientRequest.get("/probe").pipe(HttpClient.execute)
+
+      expect(response.status).toBe(200)
+      expect(yield* response.json).toEqual({ directory: dir, workspaceID: null })
+    }),
+  )
+
   it.live("proxies remote workspace HTTP requests through the selected workspace target", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
