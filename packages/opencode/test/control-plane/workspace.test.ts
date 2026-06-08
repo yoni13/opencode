@@ -34,6 +34,7 @@ import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { TestConfig } from "../fixture/config"
 
 void Log.init({ print: false })
 
@@ -368,6 +369,7 @@ describe("workspace schemas and exports", () => {
       id: WorkspaceV2.ID.ascending("wrk_schema_create"),
       type: "worktree",
       branch: "feature/schema",
+      directory: "/workspace-source",
       projectID: ProjectV2.ID.make("project-schema"),
       extra: { nested: true },
     }
@@ -497,6 +499,54 @@ describe("workspace CRUD", () => {
 
         yield* workspace.remove(workspaceID)
         expect((yield* workspace.status()).find((item) => item.workspaceID === workspaceID)?.status).toBeUndefined()
+      }),
+    { git: true },
+  )
+
+  it.instance(
+    "create uses configured default directory as the workspace source",
+    () =>
+      Effect.gen(function* () {
+        const instance = yield* requireInstance
+        const workspace = yield* Workspace.Service
+        const type = unique("create-default-directory")
+        const defaultSource = path.join(instance.directory, "default-source")
+        const explicitSource = path.join(instance.directory, "explicit-source")
+        const targetDir = path.join(instance.directory, "created-from-default")
+        yield* Effect.promise(() => fs.mkdir(defaultSource, { recursive: true }))
+        yield* Effect.promise(() => fs.mkdir(explicitSource, { recursive: true }))
+
+        const recorded = recordedAdapter({
+          configure(info) {
+            return { ...info, directory: targetDir }
+          },
+          async create() {
+            await fs.mkdir(targetDir, { recursive: true })
+          },
+          target() {
+            return { type: "local", directory: targetDir }
+          },
+        })
+        registerAdapter(instance.project.id, type, recorded.adapter)
+
+        const layer = TestConfig.layer({
+          get: () => Effect.succeed({ workspace: { default_directory: defaultSource } }),
+        })
+
+        const first = yield* workspace
+          .create({ type, branch: null, projectID: instance.project.id, extra: null })
+          .pipe(Effect.provide(layer))
+        const second = yield* workspace
+          .create({ type, branch: null, directory: explicitSource, projectID: instance.project.id, extra: null })
+          .pipe(Effect.provide(layer))
+
+        expect(recorded.calls.configure[0].directory).toBe(defaultSource)
+        expect(recorded.calls.configure[1].directory).toBe(explicitSource)
+        expect(first.directory).toBe(targetDir)
+        expect(second.directory).toBe(targetDir)
+
+        yield* workspace.remove(first.id)
+        yield* workspace.remove(second.id)
       }),
     { git: true },
   )

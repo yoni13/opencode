@@ -32,6 +32,7 @@ import { Vcs } from "@/project/vcs"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { WorkspaceAdapterRuntime } from "./workspace-adapter-runtime"
+import { Config } from "@/config/config"
 
 export const Info = Schema.Struct({
   ...WorkspaceInfoSchema.fields,
@@ -80,6 +81,7 @@ export const CreateInput = Schema.Struct({
   id: Schema.optional(WorkspaceV2.ID),
   type: Info.fields.type,
   branch: Info.fields.branch,
+  directory: Schema.optional(Info.fields.directory),
   projectID: ProjectV2.ID,
   extra: Schema.optional(Info.fields.extra),
 })
@@ -532,13 +534,22 @@ export const layer = Layer.effect(
     const create = Effect.fn("Workspace.create")(function* (input: CreateInput) {
       const id = WorkspaceV2.ID.ascending(input.id)
       const adapter = getAdapter(input.projectID, input.type)
-      const config = yield* WorkspaceAdapterRuntime.configure(adapter, {
-        ...input,
-        id,
-        name: Slug.create(),
-        directory: null,
-        extra: input.extra ?? null,
-      })
+      const configSvc = yield* Effect.serviceOption(Config.Service)
+      const defaultDirectory =
+        configSvc._tag === "Some" ? (yield* configSvc.value.get()).workspace?.default_directory : undefined
+      const sourceDirectory =
+        input.directory !== undefined ? input.directory : (defaultDirectory ?? null)
+      const config = yield* WorkspaceAdapterRuntime.configure(
+        adapter,
+        {
+          ...input,
+          id,
+          name: Slug.create(),
+          directory: sourceDirectory,
+          extra: input.extra ?? null,
+        },
+        sourceDirectory ?? undefined,
+      )
 
       const info: Info = {
         id,
@@ -576,7 +587,7 @@ export const layer = Layer.effect(
       }
 
       return yield* Effect.gen(function* () {
-        yield* WorkspaceAdapterRuntime.create(adapter, config, env)
+        yield* WorkspaceAdapterRuntime.create(adapter, config, env, undefined, sourceDirectory ?? undefined)
         if (info.directory)
           yield* project.addSandbox(input.projectID, info.directory).pipe(Effect.catch(() => Effect.void))
         const target = yield* WorkspaceAdapterRuntime.target(info)

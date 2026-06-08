@@ -39,6 +39,10 @@ function requireInstance(context: WorkspaceAdapterContext | undefined) {
   return context.instance
 }
 
+function sourceDirectory(context: WorkspaceAdapterContext | undefined) {
+  return context?.sourceDirectory ?? requireInstance(context).directory
+}
+
 function dockerName(id: string) {
   return `opencode-${id}`
 }
@@ -296,12 +300,12 @@ export const DockerAdapter: WorkspaceAdapter = {
   name: "Docker Ubuntu",
   description: "Create a persistent Ubuntu container for the session",
   async configure(info, context) {
-    const instance = requireInstance(context)
+    const source = sourceDirectory(context)
     const root = workspaceRoot(info.id)
     const next = {
       kind: "docker" as const,
       workspaceID: info.id,
-      image: await configuredImage(info, instance.directory),
+      image: await configuredImage(info, source),
       container: dockerName(info.id),
       hostDirectory: path.join(root, "workspace"),
       workspacePath: DOCKER_WORKSPACE_PATH,
@@ -316,16 +320,16 @@ export const DockerAdapter: WorkspaceAdapter = {
     }
   },
   async create(info, _env, _from, context) {
-    const instance = requireInstance(context)
+    const source = sourceDirectory(context)
     const extra = requireDockerExtra(info)
 
     await assertWorkspacePaths(extra)
     await fs.mkdir(extra.hostDirectory, { recursive: true })
-    await copyProject(instance.directory, extra.hostDirectory)
-    await snapshotConfig(instance.directory, extra.configDirectory)
+    await copyProject(source, extra.hostDirectory)
+    await snapshotConfig(source, extra.configDirectory)
     await startContainer(
       extra,
-      extra.image.startsWith("opencode-session:") ? await setupScript(instance.directory) : undefined,
+      extra.image.startsWith("opencode-session:") ? await setupScript(source) : undefined,
     )
     await ensureContainer(extra)
   },

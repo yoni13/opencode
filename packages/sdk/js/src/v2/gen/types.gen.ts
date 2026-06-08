@@ -1942,6 +1942,9 @@ export type Config = {
     urls?: Array<string>
   }
   reference?: ReferenceConfig
+  workspace?: {
+    default_directory?: string
+  }
   watcher?: {
     ignore?: Array<string>
   }
@@ -9252,6 +9255,7 @@ export type ExperimentalWorkspaceCreateData = {
     id?: string
     type: string
     branch?: string | null
+    directory?: string
     extra?: unknown | null
   }
   path?: never

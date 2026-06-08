@@ -1015,11 +1015,12 @@ export class Workspace extends HeyApiClient {
    */
   public create<ThrowOnError extends boolean = false>(
     parameters?: {
-      directory?: string
+      query_directory?: string
       workspace?: string
       id?: string
       type?: string
       branch?: string | null
+      body_directory?: string
       extra?: unknown | null
     },
     options?: Options<never, ThrowOnError>,
@@ -1029,11 +1030,20 @@ export class Workspace extends HeyApiClient {
       [
         {
           args: [
-            { in: "query", key: "directory" },
+            {
+              in: "query",
+              key: "query_directory",
+              map: "directory",
+            },
             { in: "query", key: "workspace" },
             { in: "body", key: "id" },
             { in: "body", key: "type" },
             { in: "body", key: "branch" },
+            {
+              in: "body",
+              key: "body_directory",
+              map: "directory",
+            },
             { in: "body", key: "extra" },
           ],
         },

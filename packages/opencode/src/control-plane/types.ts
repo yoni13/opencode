@@ -41,6 +41,7 @@ export type Target =
 export type WorkspaceAdapterContext = {
   readonly instance?: InstanceContext
   readonly workspaceID?: WorkspaceV2.ID
+  readonly sourceDirectory?: string
 }
 
 export type WorkspaceAdapter = {
