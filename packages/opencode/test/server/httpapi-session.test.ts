@@ -10,6 +10,7 @@ import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { registerAdapter } from "../../src/control-plane/adapters"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import type { WorkspaceAdapter } from "../../src/control-plane/types"
 import { Workspace } from "../../src/control-plane/workspace"
 
@@ -862,6 +863,34 @@ describe("session HttpApi", () => {
         expect(created).toMatchObject({ id: created.id, workspaceID: workspace.id })
         expect(messages.status).toBe(200)
         expect(yield* getWorkspaceID(created.id)).toEqual({ workspaceID: workspace.id })
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  it.instance(
+    "lists workspace sessions when querying the project root directory",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "workspace listed from root" })
+        const workspaceID = WorkspaceV2.ID.ascending("wrk_list_from_root")
+        const workspaceDirectory = path.join(test.directory, ".opencode-workspace", workspaceID)
+        const { db } = yield* Database.Service
+
+        yield* db
+          .update(SessionTable)
+          .set({ directory: workspaceDirectory, workspace_id: workspaceID })
+          .where(eq(SessionTable.id, session.id))
+          .run()
+          .pipe(Effect.orDie)
+
+        const response = yield* request(
+          `${SessionPaths.list}?directory=${encodeURIComponent(test.directory)}&roots=true&limit=55`,
+          { headers: { "x-opencode-directory": test.directory } },
+        )
+
+        expect(response.status).toBe(200)
+        expect((yield* json<Session.Info[]>(response)).map((item) => item.id)).toContain(session.id)
       }),
     { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
   )

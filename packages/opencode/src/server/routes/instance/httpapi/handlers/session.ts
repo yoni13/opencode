@@ -38,6 +38,7 @@ import {
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import { Workspace } from "@/control-plane/workspace"
+import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
@@ -67,9 +68,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
+      const instance = yield* InstanceState.context
+      const config = yield* Effect.serviceOption(Config.Service)
+      const defaultDirectory =
+        config._tag === "Some" ? (yield* config.value.getGlobal()).workspace?.default_directory : undefined
+      const isProjectDirectory =
+        ctx.query.directory !== undefined &&
+        (ctx.query.directory === defaultDirectory ||
+          (instance.project.worktree !== "/" && ctx.query.directory === instance.project.worktree))
+      const scope = isProjectDirectory ? "project" : ctx.query.scope
       return yield* session.list({
-        directory: ctx.query.scope === "project" ? undefined : ctx.query.directory,
-        scope: ctx.query.scope,
+        directory: scope === "project" ? undefined : ctx.query.directory,
+        scope,
         path: ctx.query.path,
         roots: ctx.query.roots,
         start: ctx.query.start,
