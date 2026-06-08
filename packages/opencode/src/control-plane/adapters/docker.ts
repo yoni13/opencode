@@ -25,6 +25,7 @@ const DockerConfig = Schema.Struct({
   image: Schema.optional(Schema.String),
 })
 const decodeDockerConfig = Schema.decodeUnknownOption(DockerConfig)
+const setupPath = (directory: string) => path.join(directory, ".opencode", "docker", "setup.sh")
 
 export class DockerUnavailableError extends Schema.TaggedErrorClass<DockerUnavailableError>()(
   "DockerUnavailableError",
@@ -71,10 +72,20 @@ function requireDockerExtra(info: WorkspaceInfo) {
 async function configuredImage(info: WorkspaceInfo, instanceDirectory: string) {
   const configured = decodeDockerConfig(info.extra).valueOrUndefined?.image
   if (configured) return configured
-  const setup = await Bun.file(path.join(instanceDirectory, ".opencode", "docker", "setup.sh"))
-    .text()
-    .catch(() => DEFAULT_SETUP)
+  const setup = await setupScript(instanceDirectory)
   return `opencode-session:${Hash.fast(`${dockerfile}\n${setup}`).slice(0, 12)}`
+}
+
+export async function setupScript(instanceDirectory: string) {
+  return (
+    (await Bun.file(setupPath(instanceDirectory))
+      .text()
+      .catch(() => undefined)) ??
+    (await Bun.file(path.join(Global.Path.config, "docker", "setup.sh"))
+      .text()
+      .catch(() => undefined)) ??
+    DEFAULT_SETUP
+  )
 }
 
 async function copyIfExists(from: string, to: string) {
@@ -314,11 +325,7 @@ export const DockerAdapter: WorkspaceAdapter = {
     await snapshotConfig(instance.directory, extra.configDirectory)
     await startContainer(
       extra,
-      extra.image.startsWith("opencode-session:")
-        ? await Bun.file(path.join(instance.directory, ".opencode", "docker", "setup.sh"))
-            .text()
-            .catch(() => DEFAULT_SETUP)
-        : undefined,
+      extra.image.startsWith("opencode-session:") ? await setupScript(instance.directory) : undefined,
     )
     await ensureContainer(extra)
   },
