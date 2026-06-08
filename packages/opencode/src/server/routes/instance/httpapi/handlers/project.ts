@@ -1,4 +1,5 @@
 import * as InstanceState from "@/effect/instance-state"
+import { Config } from "@/config/config"
 import { Project } from "@/project/project"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { Effect } from "effect"
@@ -12,12 +13,21 @@ export const projectHandlers = HttpApiBuilder.group(InstanceHttpApi, "project", 
     const svc = yield* Project.Service
     const project = yield* ProjectV2.Service
 
+    const withDefaultDirectory = Effect.fn("ProjectHttpApi.withDefaultDirectory")(function* (project: Project.Info) {
+      if (project.id !== ProjectV2.ID.global || project.worktree !== "/") return project
+      const config = yield* Effect.serviceOption(Config.Service)
+      if (config._tag === "None") return project
+      const directory = (yield* config.value.getGlobal()).workspace?.default_directory
+      if (!directory) return project
+      return { ...project, worktree: directory }
+    })
+
     const list = Effect.fn("ProjectHttpApi.list")(function* () {
-      return yield* svc.list()
+      return yield* Effect.forEach(yield* svc.list(), withDefaultDirectory)
     })
 
     const current = Effect.fn("ProjectHttpApi.current")(function* () {
-      return (yield* InstanceState.context).project
+      return yield* withDefaultDirectory((yield* InstanceState.context).project)
     })
 
     const initGit = Effect.fn("ProjectHttpApi.initGit")(function* () {
