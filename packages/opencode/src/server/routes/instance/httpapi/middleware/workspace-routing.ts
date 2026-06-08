@@ -89,7 +89,7 @@ function selectedV2WorkspaceID(
 const configuredDefaultDirectory = Effect.gen(function* () {
   const config = yield* Effect.serviceOption(Config.Service)
   if (config._tag === "None") return process.cwd()
-  return (yield* config.value.get()).workspace?.default_directory ?? process.cwd()
+  return (yield* config.value.getGlobal()).workspace?.default_directory ?? process.cwd()
 })
 
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL) {

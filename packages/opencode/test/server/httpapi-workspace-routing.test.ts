@@ -269,7 +269,7 @@ describe("HttpApi workspace routing middleware", () => {
         Layer.provide(probeHandlers),
         Layer.provide(workspaceRoutingTestLayer),
         Layer.provide(Layer.mock(Session.Service)({})),
-        Layer.provide(TestConfig.layer({ get: () => Effect.succeed({ workspace: { default_directory: dir } }) })),
+        Layer.provide(TestConfig.layer({ getGlobal: () => Effect.succeed({ workspace: { default_directory: dir } }) })),
         HttpRouter.serve,
         Layer.build,
       )
