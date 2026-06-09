@@ -336,7 +336,7 @@ afterEach(async () => {
 })
 
 describe("HttpApi SDK", () => {
-  test("routes configured SDK directory and workspace for POSTs", async () => {
+  test("preserves configured SDK directory and workspace headers for POSTs", async () => {
     const directory = "/tmp/sdk-post"
     const workspaceID = "wrk_sdk"
     let request: Request | undefined
@@ -358,10 +358,11 @@ describe("HttpApi SDK", () => {
 
     const url = new URL(request!.url)
     expect(request!.method).toBe("POST")
-    expect(url.searchParams.get("directory")).toBe(directory)
-    expect(url.searchParams.get("workspace")).toBe(workspaceID)
-    expect(request!.headers.has("x-opencode-directory")).toBe(false)
-    expect(request!.headers.has("x-opencode-workspace")).toBe(false)
+    expect(url.searchParams.get("directory")).toBe(null)
+    expect(url.searchParams.get("workspace")).toBe(null)
+    expect(request!.headers.get("x-opencode-directory")).toBe(encodeURIComponent(directory))
+    expect(request!.headers.get("x-opencode-workspace")).toBe(workspaceID)
+    expect(await request!.clone().text()).toBe('{"title":"sdk"}')
   })
 
   httpapi(

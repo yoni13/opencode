@@ -67,21 +67,32 @@ function configuredWorkspaceID(): WorkspaceV2.ID | undefined {
   return Flag.OPENCODE_WORKSPACE_ID ? WorkspaceV2.ID.make(Flag.OPENCODE_WORKSPACE_ID) : undefined
 }
 
-function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): WorkspaceV2.ID | undefined {
+function selectedWorkspaceID(
+  request: HttpServerRequest.HttpServerRequest,
+  url: URL,
+  sessionWorkspaceID?: WorkspaceV2.ID,
+): WorkspaceV2.ID | undefined {
   const workspaceParam = url.searchParams.get("workspace")
   if (workspaceParam === "main") return undefined
-  return sessionWorkspaceID ?? (workspaceParam ? WorkspaceV2.ID.make(workspaceParam) : undefined)
+  const workspaceHeader = request.headers["x-opencode-workspace"]
+  if (workspaceHeader === "main") return undefined
+  if (sessionWorkspaceID) return sessionWorkspaceID
+  if (workspaceParam) return WorkspaceV2.ID.make(workspaceParam)
+  if (workspaceHeader) return WorkspaceV2.ID.make(workspaceHeader)
 }
 
 function selectedV2WorkspaceID(
+  request: HttpServerRequest.HttpServerRequest,
   url: URL,
   sessionWorkspaceID?: WorkspaceV2.ID,
 ): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
   if (sessionWorkspaceID) return sessionWorkspaceID
   const workspaceParam = url.searchParams.get("workspace")
-  if (!workspaceParam) return undefined
-  if (workspaceParam === "main") return undefined
-  const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspaceParam)
+  const workspaceHeader = request.headers["x-opencode-workspace"]
+  const workspace = workspaceParam || workspaceHeader
+  if (!workspace) return undefined
+  if (workspace === "main") return undefined
+  const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspace)
   if (Option.isNone(workspaceID)) return InvalidWorkspaceID
   return workspaceID.value
 }
@@ -92,8 +103,18 @@ const configuredDefaultDirectory = Effect.gen(function* () {
   return (yield* config.value.getGlobal()).workspace?.default_directory ?? process.cwd()
 })
 
+function headerDirectory(request: HttpServerRequest.HttpServerRequest) {
+  const header = request.headers["x-opencode-directory"]
+  if (!header) return
+  try {
+    return decodeURIComponent(header)
+  } catch {
+    return header
+  }
+}
+
 function defaultDirectory(request: HttpServerRequest.HttpServerRequest, url: URL) {
-  const requested = url.searchParams.get("directory") || request.headers["x-opencode-directory"]
+  const requested = url.searchParams.get("directory") || headerDirectory(request)
   if (requested) return Effect.succeed(requested)
   return configuredDefaultDirectory
 }
@@ -176,8 +197,8 @@ function planRequest(
     const url = requestURL(request)
     const envWorkspaceID = configuredWorkspaceID()
     const workspaceID = url.pathname.startsWith("/api/")
-      ? selectedV2WorkspaceID(url, session?.workspaceID)
-      : selectedWorkspaceID(url, session?.workspaceID)
+      ? selectedV2WorkspaceID(request, url, session?.workspaceID)
+      : selectedWorkspaceID(request, url, session?.workspaceID)
     if (workspaceID === InvalidWorkspaceID) return RequestPlan.InvalidWorkspace()
     const workspace = yield* resolveWorkspace(workspaceID, envWorkspaceID)
 

@@ -20,6 +20,8 @@ function pick(value: string | null, fallback?: string, encode?: (value: string) 
 }
 
 function rewrite(request: Request, values: { directory?: string; workspace?: string }) {
+  if (request.method !== "GET" && request.method !== "HEAD") return request
+
   const url = new URL(request.url)
   let changed = false
 

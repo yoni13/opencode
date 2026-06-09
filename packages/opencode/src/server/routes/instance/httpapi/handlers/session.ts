@@ -170,7 +170,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const request = yield* HttpServerRequest.HttpServerRequest
       const currentWorkspace = yield* InstanceState.workspaceID
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
-      if (currentWorkspace || ctx.payload?.workspaceID || url.searchParams.get("workspace") === "main") {
+      if (
+        currentWorkspace ||
+        ctx.payload?.workspaceID ||
+        url.searchParams.get("workspace") === "main" ||
+        request.headers["x-opencode-workspace"] === "main"
+      ) {
         return yield* shareSvc.create(ctx.payload)
       }
 
