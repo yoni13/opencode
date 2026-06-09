@@ -77,7 +77,7 @@ export default function DockerPage() {
       serverSDK.client.session
         .list({
           roots: true,
-          limit: 500,
+          limit: 5000,
         })
         .then((result) => result.data ?? []),
     refetchInterval: 10_000,
@@ -101,6 +101,7 @@ export default function DockerPage() {
       session: sessionByWorkspaceID().get(stat.workspaceID),
     })),
   )
+  const orphanRows = createMemo(() => rows().filter((row) => row.stat.workspaceID.startsWith("wrk_") && !row.session))
   const running = createMemo(() => rows().filter((row) => row.stat.running).length)
   const imageBytes = createMemo(() =>
     rows().reduce((total, row) => total + (finiteNumber(row.stat.imageSizeBytes) ?? 0), 0),
@@ -154,6 +155,24 @@ export default function DockerPage() {
     },
   }))
 
+  const cleanOrphans = useMutation(() => ({
+    mutationFn: async () => {
+      setState("busy", "cleanup")
+      await Promise.all(orphanRows().map((row) => serverSDK.client.experimental.workspace.remove({ id: row.stat.workspaceID })))
+    },
+    onError: fail,
+    onSuccess: () =>
+      showToast({
+        variant: "success",
+        title: "Docker cleanup complete",
+        description: `Removed ${orphanRows().length} container${orphanRows().length === 1 ? "" : "s"} without sessions.`,
+      }),
+    onSettled: () => {
+      setState("busy", undefined)
+      void refresh()
+    },
+  }))
+
   return (
     <div class="m-2 min-h-0 flex-1 self-stretch rounded-[10px] bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]">
       <div class="mx-auto flex h-full max-w-[1180px] flex-col px-6 py-8">
@@ -169,13 +188,22 @@ export default function DockerPage() {
               </p>
             </div>
           </div>
-          <ButtonV2
-            variant="ghost-muted"
-            onClick={() => void refresh()}
-            disabled={stats.isFetching || workspaces.isFetching || sessions.isFetching}
-          >
-            Refresh
-          </ButtonV2>
+          <div class="flex items-center gap-2">
+            <ButtonV2
+              variant="ghost-muted"
+              onClick={() => void refresh()}
+              disabled={stats.isFetching || workspaces.isFetching || sessions.isFetching}
+            >
+              Refresh
+            </ButtonV2>
+            <ButtonV2
+              variant="ghost-muted"
+              disabled={state.busy === "cleanup" || sessions.isLoading || sessions.isError || orphanRows().length === 0}
+              onClick={() => cleanOrphans.mutate()}
+            >
+              Auto-clean orphans ({orphanRows().length})
+            </ButtonV2>
+          </div>
         </header>
 
         <div class="grid grid-cols-2 gap-3 py-5 md:grid-cols-4">
@@ -210,7 +238,7 @@ export default function DockerPage() {
               <tbody>
                 <For each={rows()}>
                   {(row) => {
-                    const busy = () => state.busy === row.stat.workspaceID
+                    const busy = () => state.busy === "cleanup" || state.busy === row.stat.workspaceID
                     return (
                       <tr class="border-t border-v2-border-border-base">
                         <td class="max-w-[220px] px-4 py-3 align-middle">
