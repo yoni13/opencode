@@ -1,4 +1,8 @@
-import type { ExperimentalWorkspaceDockerResponse, ExperimentalWorkspaceListResponse } from "@opencode-ai/sdk/v2/client"
+import type {
+  ExperimentalWorkspaceDockerResponse,
+  ExperimentalWorkspaceListResponse,
+  Session,
+} from "@opencode-ai/sdk/v2/client"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { Icon } from "@opencode-ai/ui/icon"
 import { Switch } from "@opencode-ai/ui/v2/switch-v2"
@@ -46,6 +50,10 @@ function workspaceLabel(workspace: Workspace | undefined, stat: DockerStat) {
   return stat.workspaceID
 }
 
+function sessionLabel(session: Session | undefined) {
+  return session?.title || session?.slug || "—"
+}
+
 export default function DockerPage() {
   const navigate = useNavigate()
   const serverSDK = useServerSDK()
@@ -63,11 +71,34 @@ export default function DockerPage() {
     refetchInterval: 5000,
   }))
 
+  const sessions = useQuery(() => ({
+    queryKey: [serverSDK.scope, "docker", "sessions"] as const,
+    queryFn: () =>
+      serverSDK.client.session
+        .list({
+          roots: true,
+          limit: 500,
+        })
+        .then((result) => result.data ?? []),
+    refetchInterval: 10_000,
+  }))
+
   const workspaceByID = createMemo(() => new Map((workspaces.data ?? []).map((item) => [item.id, item] as const)))
+  const sessionByWorkspaceID = createMemo(() => {
+    const map = new Map<string, Session>()
+    for (const session of sessions.data ?? []) {
+      if (!session.workspaceID) continue
+      const current = map.get(session.workspaceID)
+      if (current && (current.time.updated ?? current.time.created) >= (session.time.updated ?? session.time.created)) continue
+      map.set(session.workspaceID, session)
+    }
+    return map
+  })
   const rows = createMemo(() =>
     (stats.data ?? []).map((stat) => ({
       stat,
       workspace: workspaceByID().get(stat.workspaceID),
+      session: sessionByWorkspaceID().get(stat.workspaceID),
     })),
   )
   const running = createMemo(() => rows().filter((row) => row.stat.running).length)
@@ -78,7 +109,7 @@ export default function DockerPage() {
     rows().reduce((total, row) => total + (finiteNumber(row.stat.memoryUsageBytes) ?? 0), 0),
   )
 
-  const refresh = () => Promise.all([workspaces.refetch(), stats.refetch()])
+  const refresh = () => Promise.all([workspaces.refetch(), stats.refetch(), sessions.refetch()])
 
   const fail = (err: unknown) =>
     showToast({
@@ -138,7 +169,11 @@ export default function DockerPage() {
               </p>
             </div>
           </div>
-          <ButtonV2 variant="ghost-muted" onClick={() => void refresh()} disabled={stats.isFetching || workspaces.isFetching}>
+          <ButtonV2
+            variant="ghost-muted"
+            onClick={() => void refresh()}
+            disabled={stats.isFetching || workspaces.isFetching || sessions.isFetching}
+          >
             Refresh
           </ButtonV2>
         </header>
@@ -159,10 +194,11 @@ export default function DockerPage() {
               </div>
             }
           >
-            <table class="w-full min-w-[960px] border-collapse text-left text-[12px]">
+            <table class="w-full min-w-[1120px] border-collapse text-left text-[12px]">
               <thead class="sticky top-0 bg-v2-background-bg-layer-01 text-v2-text-text-muted">
                 <tr>
                   <DockerHeader label="Workspace" />
+                  <DockerHeader label="Session" />
                   <DockerHeader label="Container" />
                   <DockerHeader label="Status" />
                   <DockerHeader label="RAM" />
@@ -183,6 +219,16 @@ export default function DockerPage() {
                             <span class="truncate font-mono text-[11px] text-v2-text-text-faint">
                               {row.stat.workspaceID}
                             </span>
+                          </div>
+                        </td>
+                        <td class="max-w-[240px] px-4 py-3 align-middle">
+                          <div class="flex min-w-0 flex-col gap-1">
+                            <span class="truncate text-v2-text-text-base">{sessionLabel(row.session)}</span>
+                            <Show when={row.session}>
+                              {(session) => (
+                                <span class="truncate font-mono text-[11px] text-v2-text-text-faint">{session().id}</span>
+                              )}
+                            </Show>
                           </div>
                         </td>
                         <td class="max-w-[220px] px-4 py-3 align-middle">
