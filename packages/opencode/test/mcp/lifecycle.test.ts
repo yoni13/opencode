@@ -728,6 +728,33 @@ it.instance(
   },
 )
 
+it.instance(
+  "tools() reconnects failed local MCP servers",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        lastCreatedClientName = "recover-server"
+        connectShouldFail = true
+        connectError = "Connection closed"
+
+        yield* mcp.add("recover-server", {
+          type: "local",
+          command: ["echo", "test"],
+        })
+
+        expect((yield* mcp.status())["recover-server"]?.status).toBe("failed")
+
+        connectShouldFail = false
+        const tools = yield* mcp.tools()
+        const status = yield* mcp.status()
+
+        expect(status["recover-server"]?.status).toBe("connected")
+        expect(Object.keys(tools).some((key) => key.includes("test_tool"))).toBe(true)
+      }),
+    ),
+  { config: { mcp: {} } },
+)
+
 // ========================================================================
 // Bug #5: McpOAuthCallback.cancelPending uses wrong key
 // ========================================================================

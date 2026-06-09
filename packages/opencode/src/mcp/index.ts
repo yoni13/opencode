@@ -439,6 +439,7 @@ export const layer = Layer.effect(
       const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
       const environment = {
         ...(cmd === "opencode" ? { BUN_BE_BUN: "1" } : {}),
+        ...mcp.env,
         ...mcp.environment,
       }
       const execution = runtime
@@ -693,6 +694,24 @@ export const layer = Layer.effect(
       return yield* storeClient(s, name, result.mcpClient, result.defs!, mcp.timeout, result.cleanup)
     })
 
+    const reconnectFailedLocalClients = Effect.fn("MCP.reconnectFailedLocalClients")(function* () {
+      const s = yield* InstanceState.get(state)
+      const cfg = yield* cfgSvc.get()
+      const config = cfg.mcp ?? {}
+
+      yield* Effect.forEach(
+        Object.entries({ ...config, ...s.config }),
+        ([name, mcp]) =>
+          Effect.gen(function* () {
+            if (!isMcpConfigured(mcp)) return
+            if (mcp.type !== "local" || mcp.enabled === false) return
+            if (s.clients[name] || s.status[name]?.status !== "failed") return
+            yield* createAndStore(name, mcp).pipe(Effect.catch(() => Effect.void))
+          }),
+        { concurrency: "unbounded" },
+      )
+    })
+
     const add = Effect.fn("MCP.add")(function* (name: string, mcp: ConfigMCPV1.Info) {
       const s = yield* InstanceState.get(state)
       s.config[name] = mcp
@@ -715,6 +734,7 @@ export const layer = Layer.effect(
 
     const tools = Effect.fn("MCP.tools")(function* () {
       const result: Record<string, Tool> = {}
+      yield* reconnectFailedLocalClients()
       const s = yield* InstanceState.get(state)
 
       const cfg = yield* cfgSvc.get()
