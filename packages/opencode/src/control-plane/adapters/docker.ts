@@ -1,13 +1,15 @@
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { execFile } from "node:child_process"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 import dockerfile from "./docker/Dockerfile" with { type: "text" }
+import { Database } from "@opencode-ai/core/database/database"
 import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { Global } from "@opencode-ai/core/global"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { WorkspaceTable } from "@opencode-ai/core/control-plane/workspace.sql"
 import { type WorkspaceAdapter, type WorkspaceAdapterContext, type WorkspaceInfo } from "../types"
 import {
   DOCKER_CONFIG_PATH,
@@ -26,6 +28,19 @@ const DockerConfig = Schema.Struct({
 })
 const decodeDockerConfig = Schema.decodeUnknownOption(DockerConfig)
 const setupPath = (directory: string) => path.join(directory, ".opencode", "docker", "setup.sh")
+
+export type DockerWorkspaceStats = {
+  workspaceID: WorkspaceV2.ID
+  container: string
+  image: string
+  status: string
+  running: boolean
+  idleStopDisabled: boolean
+  imageSizeBytes?: number
+  memoryUsageBytes?: number
+  memoryLimitBytes?: number
+  memoryPercent?: number
+}
 
 export class DockerUnavailableError extends Schema.TaggedErrorClass<DockerUnavailableError>()(
   "DockerUnavailableError",
@@ -133,6 +148,26 @@ async function docker(args: string[]) {
   return run("docker", args)
 }
 
+async function persistedDockerWorkspaces() {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const db = (yield* Database.Service).db
+      const rows = yield* db
+        .select({ id: WorkspaceTable.id, extra: WorkspaceTable.extra })
+        .from(WorkspaceTable)
+        .all()
+        .pipe(Effect.orDie)
+      return new Map(
+        rows.flatMap((row) => {
+          const extra = decodeDockerWorkspaceExtra(row.extra).valueOrUndefined
+          if (!extra) return []
+          return [[extra.container, { ...extra, workspaceID: extra.workspaceID ?? row.id }] as const]
+        }),
+      )
+    }).pipe(Effect.provide(Database.defaultLayer)),
+  ).catch(() => new Map<string, DockerWorkspaceExtra>())
+}
+
 export async function assertDockerAvailable() {
   const result = await docker(["info", "--format", "{{.ServerVersion}}"])
     .then((result) => ({ ok: true as const, stdout: result.stdout }))
@@ -148,6 +183,7 @@ export async function assertDockerAvailable() {
     })
   }
   if (result.stdout.trim()) {
+    const persisted = await persistedDockerWorkspaces()
     const containers = await docker(["ps", "--format", "{{.Names}}"]).then((value) =>
       value.stdout.split("\n").filter((container) => container.startsWith("opencode-wrk")),
     )
@@ -158,17 +194,19 @@ export async function assertDockerAvailable() {
         .catch(() => undefined)
       if (!workspaceID) continue
       const root = workspaceRoot(workspaceID)
-      const extra = {
-        kind: "docker",
-        workspaceID,
-        image: "",
-        container,
-        hostDirectory: path.join(root, "workspace"),
-        workspacePath: DOCKER_WORKSPACE_PATH,
-        configDirectory: path.join(root, "config"),
-        createdAt: 0,
-        idleStopDisabled: false,
-      } satisfies DockerWorkspaceExtra
+      const extra =
+        persisted.get(container) ??
+        ({
+          kind: "docker",
+          workspaceID,
+          image: "",
+          container,
+          hostDirectory: path.join(root, "workspace"),
+          workspacePath: DOCKER_WORKSPACE_PATH,
+          configDirectory: path.join(root, "config"),
+          createdAt: 0,
+          idleStopDisabled: false,
+        } satisfies DockerWorkspaceExtra)
       const owned = await inspectContainer(extra).catch(() => undefined)
       if (!owned) continue
       DockerRuntime.scheduleIdleStop(extra)
@@ -192,6 +230,110 @@ function dockerError(error: unknown) {
     return stderr || stdout || message || String(error)
   }
   return String(error)
+}
+
+export async function dockerWorkspaceStats(workspaces: WorkspaceInfo[]) {
+  const rows = await Promise.all(
+    workspaces.flatMap((workspace) => {
+      const extra = decodeDockerWorkspaceExtra(workspace.extra).valueOrUndefined
+      if (!extra) return []
+      return [dockerWorkspaceStat(workspace.id, extra)]
+    }),
+  )
+  return rows.sort((a, b) => a.container.localeCompare(b.container))
+}
+
+export async function startDockerWorkspace(info: WorkspaceInfo) {
+  const extra = requireDockerExtra(info)
+  await ensureContainer(extra)
+  return dockerWorkspaceStat(info.id, extra)
+}
+
+export async function stopDockerWorkspace(info: WorkspaceInfo) {
+  const extra = requireDockerExtra(info)
+  DockerRuntime.clearIdleStop(extra)
+  const existing = await inspectContainer(extra)
+  if (existing?.running) await docker(["stop", extra.container])
+  return dockerWorkspaceStat(info.id, extra)
+}
+
+async function dockerWorkspaceStat(workspaceID: WorkspaceV2.ID, extra: DockerWorkspaceExtra): Promise<DockerWorkspaceStats> {
+  const inspect = await docker(["container", "inspect", extra.container])
+    .then((value) => (JSON.parse(value.stdout) as ContainerStatInspect[])[0])
+    .catch(() => undefined)
+  const stats = inspect?.State?.Running
+    ? await docker(["stats", "--no-stream", "--format", "{{json .}}", extra.container])
+        .then((value) => parseContainerStats(value.stdout))
+        .catch(() => undefined)
+    : undefined
+  return {
+    workspaceID,
+    container: extra.container,
+    image: extra.image,
+    status: inspect?.State?.Status ?? "missing",
+    running: inspect?.State?.Running === true,
+    idleStopDisabled: extra.idleStopDisabled === true,
+    imageSizeBytes: await docker(["image", "inspect", extra.image, "--format", "{{json .Size}}"])
+      .then((value) => Number.parseInt(value.stdout.trim(), 10))
+      .then((value) => (Number.isFinite(value) ? value : undefined))
+      .catch(() => undefined),
+    memoryUsageBytes: stats?.memoryUsageBytes,
+    memoryLimitBytes: stats?.memoryLimitBytes,
+    memoryPercent: stats?.memoryPercent,
+  }
+}
+
+type ContainerStatInspect = {
+  State?: {
+    Status?: string
+    Running?: boolean
+  }
+}
+
+function parseContainerStats(stdout: string) {
+  const line = stdout
+    .split("\n")
+    .map((item) => item.trim())
+    .find(Boolean)
+  if (!line) return
+  const stat = JSON.parse(line) as { MemUsage?: string; MemPerc?: string }
+  const memory = stat.MemUsage?.split("/").map((item) => parseDockerSize(item.trim())) ?? []
+  return {
+    memoryUsageBytes: memory[0],
+    memoryLimitBytes: memory[1],
+    memoryPercent: parsePercent(stat.MemPerc),
+  }
+}
+
+function parsePercent(value: string | undefined) {
+  if (!value) return
+  const parsed = Number.parseFloat(value.replace("%", ""))
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function parseDockerSize(value: string) {
+  const match = value.match(/^([\d.]+)\s*([kmgtp]?i?b)$/i)
+  if (!match) return
+  const amount = Number.parseFloat(match[1]!)
+  if (!Number.isFinite(amount)) return
+  const unit = match[2]!.toLowerCase()
+  const powers: Record<string, number> = {
+    b: 0,
+    kb: 1,
+    mb: 2,
+    gb: 3,
+    tb: 4,
+    pb: 5,
+    kib: 1,
+    mib: 2,
+    gib: 3,
+    tib: 4,
+    pib: 5,
+  }
+  const power = powers[unit]
+  if (power === undefined) return
+  const base = unit.includes("i") ? 1024 : 1000
+  return Math.round(amount * base ** power)
 }
 
 async function ensureImage(image: string, setup: string | undefined) {

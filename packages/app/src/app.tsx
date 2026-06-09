@@ -51,6 +51,7 @@ import { ErrorPage } from "./pages/error"
 import { useCheckServerHealth } from "./utils/server-health"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
+const DockerRoute = lazy(() => import("@/pages/docker"))
 const Session = lazy(() => import("@/pages/session"))
 
 const SessionRoute = Object.assign(
@@ -336,6 +337,7 @@ export function AppInterface(props: {
             )}
           >
             <Route path="/" component={HomeRoute} />
+            <Route path="/docker" component={DockerRoute} />
             <Route path="/:dir" component={DirectoryLayout}>
               <Route path="/" component={() => <Navigate href="session" />} />
               <Route path="/session/:id?" component={SessionRoute} />

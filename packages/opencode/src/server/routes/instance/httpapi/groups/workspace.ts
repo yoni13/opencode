@@ -14,6 +14,18 @@ export const CreatePayload = Schema.Struct(Struct.omit(Workspace.CreateInput.fie
 export const UpdatePayload = Schema.Struct({
   extra: Schema.optional(Workspace.Info.fields.extra),
 })
+export const DockerStats = Schema.Struct({
+  workspaceID: Workspace.Info.fields.id,
+  container: Schema.String,
+  image: Schema.String,
+  status: Schema.String,
+  running: Schema.Boolean,
+  idleStopDisabled: Schema.Boolean,
+  imageSizeBytes: Schema.optional(Schema.Number),
+  memoryUsageBytes: Schema.optional(Schema.Number),
+  memoryLimitBytes: Schema.optional(Schema.Number),
+  memoryPercent: Schema.optional(Schema.Number),
+})
 export const WarpPayload = Schema.Struct({
   id: Schema.NullOr(Workspace.Info.fields.id),
   sessionID: Workspace.SessionWarpInput.fields.sessionID,
@@ -43,6 +55,9 @@ export class ApiWorkspaceCreateError extends Schema.ErrorClass<ApiWorkspaceCreat
 export const WorkspacePaths = {
   adapters: `${root}/adapter`,
   list: root,
+  docker: `${root}/docker`,
+  dockerStart: `${root}/:id/docker/start`,
+  dockerStop: `${root}/:id/docker/stop`,
   syncList: `${root}/sync-list`,
   status: `${root}/status`,
   remove: `${root}/:id`,
@@ -84,6 +99,40 @@ export const WorkspaceApi = HttpApi.make("workspace")
             identifier: "experimental.workspace.create",
             summary: "Create workspace",
             description: "Create a workspace for the current project.",
+          }),
+        ),
+        HttpApiEndpoint.get("dockerStats", WorkspacePaths.docker, {
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(DockerStats), "Docker workspace stats"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workspace.docker",
+            summary: "Docker workspace stats",
+            description: "List Docker workspace containers with image and runtime stats.",
+          }),
+        ),
+        HttpApiEndpoint.post("dockerStart", WorkspacePaths.dockerStart, {
+          params: { id: Workspace.Info.fields.id },
+          query: WorkspaceRoutingQuery,
+          success: described(DockerStats, "Docker workspace started"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workspace.docker.start",
+            summary: "Start Docker workspace",
+            description: "Start a Docker workspace container.",
+          }),
+        ),
+        HttpApiEndpoint.post("dockerStop", WorkspacePaths.dockerStop, {
+          params: { id: Workspace.Info.fields.id },
+          query: WorkspaceRoutingQuery,
+          success: described(DockerStats, "Docker workspace stopped"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.workspace.docker.stop",
+            summary: "Stop Docker workspace",
+            description: "Stop a Docker workspace container.",
           }),
         ),
         HttpApiEndpoint.post("syncList", WorkspacePaths.syncList, {

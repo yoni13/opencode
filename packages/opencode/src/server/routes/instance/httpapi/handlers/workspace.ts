@@ -1,4 +1,5 @@
 import { listAdapters } from "@/control-plane/adapters"
+import { dockerWorkspaceStats, startDockerWorkspace, stopDockerWorkspace } from "@/control-plane/adapters/docker"
 import { Workspace } from "@/control-plane/workspace"
 import * as InstanceState from "@/effect/instance-state"
 import { Vcs } from "@/project/vcs"
@@ -54,6 +55,27 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
         )
     })
 
+    const docker = Effect.fn("WorkspaceHttpApi.docker")(function* () {
+      const items = yield* workspace.list((yield* InstanceState.context).project)
+      return yield* Effect.promise(() => dockerWorkspaceStats(items))
+    })
+
+    const dockerStart = Effect.fn("WorkspaceHttpApi.dockerStart")(function* (ctx: {
+      params: { id: Workspace.Info["id"] }
+    }) {
+      const info = yield* workspace.get(ctx.params.id)
+      if (!info) return yield* Effect.fail(notFound("Workspace not found"))
+      return yield* Effect.promise(() => startDockerWorkspace(info))
+    })
+
+    const dockerStop = Effect.fn("WorkspaceHttpApi.dockerStop")(function* (ctx: {
+      params: { id: Workspace.Info["id"] }
+    }) {
+      const info = yield* workspace.get(ctx.params.id)
+      if (!info) return yield* Effect.fail(notFound("Workspace not found"))
+      return yield* Effect.promise(() => stopDockerWorkspace(info))
+    })
+
     const syncList = Effect.fn("WorkspaceHttpApi.syncList")(function* () {
       yield* workspace.syncList((yield* InstanceState.context).project)
     })
@@ -107,6 +129,9 @@ export const workspaceHandlers = HttpApiBuilder.group(InstanceHttpApi, "workspac
       .handle("adapters", adapters)
       .handle("list", list)
       .handle("create", create)
+      .handle("dockerStats", docker)
+      .handle("dockerStart", dockerStart)
+      .handle("dockerStop", dockerStop)
       .handle("syncList", syncList)
       .handle("status", status)
       .handle("remove", remove)

@@ -52,6 +52,12 @@ import type {
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
   ExperimentalWorkspaceCreateResponses,
+  ExperimentalWorkspaceDockerErrors,
+  ExperimentalWorkspaceDockerResponses,
+  ExperimentalWorkspaceDockerStartErrors,
+  ExperimentalWorkspaceDockerStartResponses,
+  ExperimentalWorkspaceDockerStopErrors,
+  ExperimentalWorkspaceDockerStopResponses,
   ExperimentalWorkspaceListErrors,
   ExperimentalWorkspaceListResponses,
   ExperimentalWorkspaceRemoveErrors,
@@ -975,6 +981,80 @@ export class Adapter extends HeyApiClient {
   }
 }
 
+export class Docker extends HeyApiClient {
+  /**
+   * Start Docker workspace
+   *
+   * Start a Docker workspace container.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkspaceDockerStartResponses,
+      ExperimentalWorkspaceDockerStartErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workspace/{id}/docker/start",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Stop Docker workspace
+   *
+   * Stop a Docker workspace container.
+   */
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      ExperimentalWorkspaceDockerStopResponses,
+      ExperimentalWorkspaceDockerStopErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workspace/{id}/docker/stop",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Workspace extends HeyApiClient {
   /**
    * List workspaces
@@ -1064,6 +1144,40 @@ export class Workspace extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /**
+   * Docker workspace stats
+   *
+   * List Docker workspace containers with image and runtime stats.
+   */
+  public docker<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ExperimentalWorkspaceDockerResponses,
+      ExperimentalWorkspaceDockerErrors,
+      ThrowOnError
+    >({
+      url: "/experimental/workspace/docker",
+      ...options,
+      ...params,
     })
   }
 
@@ -1262,6 +1376,11 @@ export class Workspace extends HeyApiClient {
   private _adapter?: Adapter
   get adapter(): Adapter {
     return (this._adapter ??= new Adapter({ client: this.client }))
+  }
+
+  private _docker?: Docker
+  get docker2(): Docker {
+    return (this._docker ??= new Docker({ client: this.client }))
   }
 }
 

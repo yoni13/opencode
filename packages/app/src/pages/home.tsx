@@ -397,6 +397,7 @@ function HomeDesign() {
           clearNotifications={clearNotifications}
           unseenCount={unseenCount}
           openSettings={openSettings}
+          openDocker={() => navigate("/docker")}
           openHelp={() => platform.openLink("https://opencode.ai/desktop-feedback")}
           language={language}
         />
@@ -483,6 +484,7 @@ function HomeProjectColumn(props: {
   clearNotifications: (server: ServerConnection.Any, project: LocalProject) => void
   unseenCount: (server: ServerConnection.Any, project: LocalProject) => number
   openSettings: () => void
+  openDocker: () => void
   openHelp: () => void
   language: ReturnType<typeof useLanguage>
 }) {
@@ -537,6 +539,14 @@ function HomeProjectColumn(props: {
         </For>
       </Show>
       <div class="mt-4 flex min-w-0 flex-col gap-1">
+        <button
+          type="button"
+          class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}
+          onClick={props.openDocker}
+        >
+          <Icon name="server" size="small" />
+          <span class={HOME_PROJECT_NAV_LABEL}>Docker</span>
+        </button>
         <button
           type="button"
           class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}

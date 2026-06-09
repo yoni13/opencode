@@ -9286,6 +9286,141 @@ export type ExperimentalWorkspaceCreateResponses = {
 export type ExperimentalWorkspaceCreateResponse =
   ExperimentalWorkspaceCreateResponses[keyof ExperimentalWorkspaceCreateResponses]
 
+export type ExperimentalWorkspaceDockerData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/docker"
+}
+
+export type ExperimentalWorkspaceDockerErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type ExperimentalWorkspaceDockerError =
+  ExperimentalWorkspaceDockerErrors[keyof ExperimentalWorkspaceDockerErrors]
+
+export type ExperimentalWorkspaceDockerResponses = {
+  /**
+   * Docker workspace stats
+   */
+  200: Array<{
+    workspaceID: string
+    container: string
+    image: string
+    status: string
+    running: boolean
+    idleStopDisabled: boolean
+    imageSizeBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryUsageBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryLimitBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }>
+}
+
+export type ExperimentalWorkspaceDockerResponse =
+  ExperimentalWorkspaceDockerResponses[keyof ExperimentalWorkspaceDockerResponses]
+
+export type ExperimentalWorkspaceDockerStartData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/{id}/docker/start"
+}
+
+export type ExperimentalWorkspaceDockerStartErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalWorkspaceDockerStartError =
+  ExperimentalWorkspaceDockerStartErrors[keyof ExperimentalWorkspaceDockerStartErrors]
+
+export type ExperimentalWorkspaceDockerStartResponses = {
+  /**
+   * Docker workspace started
+   */
+  200: {
+    workspaceID: string
+    container: string
+    image: string
+    status: string
+    running: boolean
+    idleStopDisabled: boolean
+    imageSizeBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryUsageBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryLimitBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ExperimentalWorkspaceDockerStartResponse =
+  ExperimentalWorkspaceDockerStartResponses[keyof ExperimentalWorkspaceDockerStartResponses]
+
+export type ExperimentalWorkspaceDockerStopData = {
+  body?: never
+  path: {
+    id: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/experimental/workspace/{id}/docker/stop"
+}
+
+export type ExperimentalWorkspaceDockerStopErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type ExperimentalWorkspaceDockerStopError =
+  ExperimentalWorkspaceDockerStopErrors[keyof ExperimentalWorkspaceDockerStopErrors]
+
+export type ExperimentalWorkspaceDockerStopResponses = {
+  /**
+   * Docker workspace stopped
+   */
+  200: {
+    workspaceID: string
+    container: string
+    image: string
+    status: string
+    running: boolean
+    idleStopDisabled: boolean
+    imageSizeBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryUsageBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryLimitBytes?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryPercent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type ExperimentalWorkspaceDockerStopResponse =
+  ExperimentalWorkspaceDockerStopResponses[keyof ExperimentalWorkspaceDockerStopResponses]
+
 export type ExperimentalWorkspaceSyncListData = {
   body?: never
   path?: never
