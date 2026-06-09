@@ -1397,7 +1397,11 @@ export const layer = Layer.effect(
               modelID: lastUser.model.modelID,
               providerID: lastUser.model.providerID,
               history: msgs,
-            }).pipe(Effect.ignore, Effect.forkIn(scope))
+            }).pipe(
+              Effect.timeout("30 seconds"),
+              Effect.catchCause((cause) => slog.warn("failed to generate title", { error: Cause.squash(cause) })),
+              Effect.forkDetach,
+            )
 
           const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
           const task = tasks.pop()
