@@ -4,6 +4,10 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_VERSION=22.16.0
 
 ENV UV_INSTALL_DIR=/usr/local/bin
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/opencode/browser-cache/playwright
+ENV PUPPETEER_CACHE_DIR=/opt/opencode/browser-cache/puppeteer
+ENV UV_CACHE_DIR=/root/.cache/uv
+ENV npm_config_cache=/root/.npm
 ENV PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV npm_config_update_notifier=false
@@ -11,7 +15,6 @@ ENV npm_config_update_notifier=false
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
-    build-essential \
     ca-certificates \
     curl \
     fd-find \
@@ -22,8 +25,6 @@ RUN apt-get update \
     lsof \
     netcat-openbsd \
     openssh-client \
-    pipx \
-    pkg-config \
     procps \
     psmisc \
     python-is-python3 \
@@ -56,8 +57,7 @@ RUN set -eux; \
   uv --version; \
   uvx --version; \
   python --version; \
-  python3 --version; \
-  pipx --version
+  python3 --version
 
 COPY setup.sh /tmp/opencode-docker-setup.sh
 RUN /bin/bash /tmp/opencode-docker-setup.sh \

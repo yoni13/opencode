@@ -66,6 +66,10 @@ function workspaceRoot(id: string) {
   return path.join(Global.Path.data, "docker-workspace", id)
 }
 
+function sharedCacheRoot() {
+  return path.join(Global.Path.cache, "docker-session-shared")
+}
+
 function requireDockerExtra(info: WorkspaceInfo) {
   const extra = decodeDockerWorkspaceExtra(info.extra).valueOrUndefined
   if (!extra) throw new Error("Docker workspace metadata is missing")
@@ -388,6 +392,16 @@ async function removeContainer(extra: DockerWorkspaceExtra) {
   await docker(["rm", "-f", extra.container])
 }
 
+async function sharedCacheMounts() {
+  const mounts = [
+    ["browser-cache", "/opt/opencode/browser-cache"],
+    ["npm", "/root/.npm"],
+    ["uv", "/root/.cache/uv"],
+  ] as const
+  await Promise.all(mounts.map(([name]) => fs.mkdir(path.join(sharedCacheRoot(), name), { recursive: true })))
+  return mounts.flatMap(([name, target]) => ["-v", `${path.join(sharedCacheRoot(), name)}:${target}`])
+}
+
 async function startContainer(extra: DockerWorkspaceExtra, setup: string | undefined) {
   await assertWorkspacePaths(extra)
   await ensureImage(extra.image, setup)
@@ -411,6 +425,7 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
     `${path.join(extra.configDirectory, ".agents")}:/root/.agents:ro`,
     "-v",
     `${path.join(extra.configDirectory, ".claude")}:/root/.claude:ro`,
+    ...(await sharedCacheMounts()),
     "-e",
     `OPENCODE_CONFIG_DIR=${DOCKER_CONFIG_PATH}`,
     extra.image,
