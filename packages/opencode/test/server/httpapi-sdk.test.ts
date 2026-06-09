@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Deferred, Effect, Layer } from "effect"
@@ -336,6 +336,34 @@ afterEach(async () => {
 })
 
 describe("HttpApi SDK", () => {
+  test("routes configured SDK directory and workspace for POSTs", async () => {
+    const directory = "/tmp/sdk-post"
+    const workspaceID = "wrk_sdk"
+    let request: Request | undefined
+    const fetch = Object.assign(
+      async (value: RequestInfo | URL) => {
+        request = value instanceof Request ? value : new Request(value)
+        return Response.json({})
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    ) satisfies typeof globalThis.fetch
+    const sdk = createOpencodeClient({
+      baseUrl: "http://localhost",
+      directory,
+      experimental_workspaceID: workspaceID,
+      fetch,
+    })
+
+    await sdk.session.create({ title: "sdk" })
+
+    const url = new URL(request!.url)
+    expect(request!.method).toBe("POST")
+    expect(url.searchParams.get("directory")).toBe(directory)
+    expect(url.searchParams.get("workspace")).toBe(workspaceID)
+    expect(request!.headers.has("x-opencode-directory")).toBe(false)
+    expect(request!.headers.has("x-opencode-workspace")).toBe(false)
+  })
+
   httpapi(
     "uses the generated SDK for global and control routes",
     Effect.gen(function* () {
