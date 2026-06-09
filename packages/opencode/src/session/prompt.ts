@@ -284,41 +284,60 @@ export const layer = Layer.effect(
 
       const subtasks = firstUser.parts.filter((p): p is SessionV1.SubtaskPart => p.type === "subtask")
       const onlySubtasks = subtasks.length > 0 && firstUser.parts.every((p) => p.type === "subtask")
+      const fallback = firstUser.parts
+        .flatMap((part) => {
+          if (part.type === "text") return [part.text]
+          if (part.type === "subtask") return [part.prompt]
+          return []
+        })
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
 
       const ag = yield* agents.get("title")
-      if (!ag) return
-      const mdl = ag.model
-        ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
-        : ((yield* provider.getSmallModel(input.providerID)) ??
-          (yield* provider.getModel(input.providerID, input.modelID)))
-      const msgs = onlySubtasks
-        ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
-        : yield* MessageV2.toModelMessagesEffect(context, mdl)
-      const text = yield* llm
-        .stream({
-          agent: ag,
-          user: firstInfo,
-          system: [],
-          small: true,
-          tools: {},
-          model: mdl,
-          sessionID: input.session.id,
-          retries: 2,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
-        })
-        .pipe(
-          Stream.filter(LLMEvent.is.textDelta),
-          Stream.map((e) => e.text),
-          Stream.mkString,
-          Effect.orDie,
-        )
+      if (!ag && !fallback) return
+      const text = ag
+        ? yield* Effect.gen(function* () {
+            const mdl = ag.model
+              ? yield* provider.getModel(ag.model.providerID, ag.model.modelID)
+              : ((yield* provider.getSmallModel(input.providerID)) ??
+                (yield* provider.getModel(input.providerID, input.modelID)))
+            const msgs = onlySubtasks
+              ? [{ role: "user" as const, content: subtasks.map((p) => p.prompt).join("\n") }]
+              : yield* MessageV2.toModelMessagesEffect(context, mdl)
+            return yield* llm
+              .stream({
+                agent: ag,
+                user: firstInfo,
+                system: [],
+                small: true,
+                tools: {},
+                model: mdl,
+                sessionID: input.session.id,
+                retries: 2,
+                messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
+              })
+              .pipe(
+                Stream.filter(LLMEvent.is.textDelta),
+                Stream.map((e) => e.text),
+                Stream.mkString,
+                Effect.catchCause((cause) =>
+                  elog.warn("title model failed, using fallback title", {
+                    sessionID: input.session.id,
+                    error: Cause.squash(cause),
+                  }).pipe(Effect.as("")),
+                ),
+              )
+          })
+        : ""
       const cleaned = text
         .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line.length > 0)
-      if (!cleaned) return
-      const t = cleaned.length > 100 ? cleaned.substring(0, 97) + "..." : cleaned
+      const title = cleaned || fallback
+      if (!title) return
+      const t = title.length > 100 ? title.substring(0, 97) + "..." : title
       yield* sessions
         .setTitle({ sessionID: input.session.id, title: t })
         .pipe(Effect.catchCause((cause) => elog.error("failed to generate title", { error: Cause.squash(cause) })))
