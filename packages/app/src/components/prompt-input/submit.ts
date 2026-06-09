@@ -20,6 +20,7 @@ import { buildRequestParts } from "./build-request-parts"
 import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
+import { retry } from "@opencode-ai/core/util/retry"
 
 type PendingPrompt = {
   abort: AbortController
@@ -437,8 +438,10 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       }
 
       if (worktreeSelection === DOCKER_WORKSPACE) {
-        const createdWorkspace = await client.experimental.workspace
-          .create({ type: "docker", branch: null })
+        const createdWorkspace = await retry(() => client.experimental.workspace.create({ type: "docker", branch: null }), {
+          attempts: 2,
+          delay: 250,
+        })
           .then((x) => x.data)
           .catch((err) => {
             showToast({

@@ -28,6 +28,7 @@ const refreshedMessages: Array<{ directory: string; sessionID: string }> = []
 let params: { id?: string } = {}
 let selected = "/repo/worktree-a"
 let variant: string | undefined
+let workspaceCreateFailures = 0
 
 const promptValue: Prompt = [{ type: "text", content: "ls", start: 0, end: 2 }]
 
@@ -38,6 +39,10 @@ const clientFor = (directory: string) => {
       workspace: {
         create: async () => {
           createdWorkspaces.push(directory)
+          if (workspaceCreateFailures > 0) {
+            workspaceCreateFailures--
+            throw new TypeError("Failed to fetch")
+          }
           return { data: { id: "wrk_docker", directory: "/repo/docker" } }
         },
       },
@@ -261,6 +266,7 @@ beforeEach(() => {
   refreshedMessages.length = 0
   selected = "/repo/worktree-a"
   variant = undefined
+  workspaceCreateFailures = 0
   for (const key of Object.keys(storedSessions)) delete storedSessions[key]
 })
 
@@ -293,6 +299,34 @@ describe("prompt submit worktree selection", () => {
     expect(createdSessions).toEqual(["/repo/docker"])
     expect(sentShell).toEqual(["/repo/docker"])
     expect(promoted).toEqual([{ directory: "/repo/docker", sessionID: "session-1" }])
+  })
+
+  test("retries transient Docker workspace creation failures", async () => {
+    selected = "docker"
+    workspaceCreateFailures = 1
+    const submit = createPromptSubmit({
+      info: () => undefined,
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "shell",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      newSessionWorktree: () => selected,
+      onNewSessionWorktreeReset: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+
+    expect(createdWorkspaces).toEqual(["/repo/main", "/repo/main"])
+    expect(createdSessions).toEqual(["/repo/docker"])
   })
 
   test("ignores duplicate submits while creating a Docker session", async () => {
