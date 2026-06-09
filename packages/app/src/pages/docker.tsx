@@ -231,7 +231,7 @@ export default function DockerPage() {
                   <DockerHeader label="Status" />
                   <DockerHeader label="RAM" />
                   <DockerHeader label="Image size" />
-                  <DockerHeader label="Auto-stop" />
+                  <DockerHeader label="Auto-stop setting" />
                   <DockerHeader label="Actions" />
                 </tr>
               </thead>
@@ -284,13 +284,27 @@ export default function DockerPage() {
                         </td>
                         <td class="px-4 py-3 align-middle text-v2-text-text-muted">{formatBytes(row.stat.imageSizeBytes)}</td>
                         <td class="px-4 py-3 align-middle">
-                          <Switch
-                            checked={row.stat.idleStopDisabled}
-                            disabled={busy()}
-                            onChange={() => toggleIdleStop.mutate({ stat: row.stat, workspace: row.workspace })}
-                          >
-                            <span class="sr-only">Disable Docker auto-stop for {row.stat.container}</span>
-                          </Switch>
+                          <div class="flex min-w-[150px] items-center gap-3">
+                            <Switch
+                              checked={row.stat.idleStopDisabled}
+                              disabled={busy()}
+                              onChange={() => toggleIdleStop.mutate({ stat: row.stat, workspace: row.workspace })}
+                            >
+                              <span class="sr-only">
+                                {row.stat.idleStopDisabled
+                                  ? `Turn auto-stop on for ${row.stat.container}`
+                                  : `Turn auto-stop off for ${row.stat.container}`}
+                              </span>
+                            </Switch>
+                            <div class="flex min-w-0 flex-col gap-1">
+                              <span class="text-v2-text-text-base">
+                                {row.stat.idleStopDisabled ? "Auto-stop off" : "Auto-stop on"}
+                              </span>
+                              <span class="text-[11px] text-v2-text-text-faint">
+                                {row.stat.idleStopDisabled ? "Keeps running" : "Stops when idle"}
+                              </span>
+                            </div>
+                          </div>
                         </td>
                         <td class="px-4 py-3 align-middle">
                           <div class="flex items-center gap-2">
