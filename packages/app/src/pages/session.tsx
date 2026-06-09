@@ -21,7 +21,7 @@ import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { debounce } from "@solid-primitives/scheduled"
 import { useLocal } from "@/context/local"
 import { selectionFromLines, useFile, type FileSelection, type SelectedLineRange } from "@/context/file"
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Select } from "@opencode-ai/ui/select"
 import { Tabs } from "@opencode-ai/ui/tabs"
@@ -71,6 +71,7 @@ import { formatServerError } from "@/utils/server-errors"
 import { useUsageExceededDialogs } from "./session/usage-exceeded-dialogs"
 
 const emptyUserMessages: UserMessage[] = []
+const activeSessionRefreshMs = 2500
 type FollowupItem = FollowupDraft & { id: string }
 type FollowupEdit = Pick<FollowupItem, "id" | "prompt" | "context">
 const emptyFollowups: FollowupItem[] = []
@@ -420,6 +421,7 @@ export default function Page() {
   let refreshTimer: number | undefined
   let idleRefreshFrame: number | undefined
   let idleRefreshTimer: number | undefined
+  let activeRefreshTimer: number | undefined
   let todoFrame: number | undefined
   let todoTimer: number | undefined
   let diffFrame: number | undefined
@@ -689,6 +691,49 @@ export default function Page() {
       { defer: true },
     ),
   )
+
+  const clearActiveRefresh = () => {
+    if (activeRefreshTimer === undefined) return
+    window.clearTimeout(activeRefreshTimer)
+    activeRefreshTimer = undefined
+  }
+
+  createEffect(
+    on(
+      () => {
+        const id = params.id
+        return [sync.directory, id, id ? (sync.data.session_status[id]?.type ?? "idle") : "idle"] as const
+      },
+      ([directory, id, status]) => {
+        clearActiveRefresh()
+        if (!id) return
+        if (status === "idle") return
+
+        const refresh = () => {
+          activeRefreshTimer = undefined
+          if (sync.directory !== directory || params.id !== id) return
+
+          void Promise.all([
+            untrack(() => sync.session.sync(id, { force: true })).catch(() => {}),
+            serverSDK.client.session
+              .status({ directory })
+              .then((response) => {
+                if (sync.directory !== directory || params.id !== id) return
+                sync.set("session_status", reconcile(response.data ?? {}, { merge: false }))
+              })
+              .catch(() => {}),
+          ]).finally(() => {
+            if (sync.directory !== directory || params.id !== id) return
+            if ((sync.data.session_status[id]?.type ?? "idle") === "idle") return
+            activeRefreshTimer = window.setTimeout(refresh, activeSessionRefreshMs)
+          })
+        }
+
+        activeRefreshTimer = window.setTimeout(refresh, activeSessionRefreshMs)
+      },
+    ),
+  )
+  onCleanup(clearActiveRefresh)
 
   createEffect(
     on(

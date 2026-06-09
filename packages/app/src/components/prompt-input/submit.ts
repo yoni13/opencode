@@ -78,7 +78,11 @@ export async function refreshSessionMessages(input: {
   directory: string
   sessionID: string
 }) {
-  const page = await input.client.session.messages({ sessionID: input.sessionID, limit: 80 })
+  const page = await input.client.session.messages({
+    directory: input.directory,
+    sessionID: input.sessionID,
+    limit: 80,
+  })
   const items = (page.data ?? []).filter((item) => !!item?.info?.id)
   const messages = items.map((item) => item.info).sort(byID)
   const parts = items

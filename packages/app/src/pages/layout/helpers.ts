@@ -33,6 +33,26 @@ export const sortedRootSessions = (store: SessionStore, now: number) => roots(st
 export const latestRootSession = (stores: SessionStore[], now: number) =>
   stores.flatMap(roots).sort(sortSessions(now))[0]
 
+export function sortedHomeRootSessions(
+  store: SessionStore,
+  now: number,
+  projects: { id?: string; worktree: string; sandboxes?: string[] }[],
+) {
+  const directory = pathKey(store.path.directory)
+  const project = projects.find(
+    (project) =>
+      pathKey(project.worktree) === directory ||
+      project.sandboxes?.some((sandbox) => pathKey(sandbox) === directory),
+  )
+  return (store.session ?? [])
+    .filter((session) => {
+      if (session.parentID || session.time?.archived) return false
+      if (pathKey(session.directory) === directory) return true
+      return !!project?.id && pathKey(project.worktree) === directory && session.projectID === project.id
+    })
+    .sort(sortSessions(now))
+}
+
 export function hasProjectPermissions<T>(
   request: Record<string, T[] | undefined> | undefined,
   include: (item: T) => boolean = () => true,
@@ -86,6 +106,49 @@ export function homeProjectNavigation(active: ServerConnection.Key, server: Serv
 export function homeProjectDirectories(result: string | string[] | null) {
   if (!result) return []
   return Array.isArray(result) ? result : [result]
+}
+
+export function hydrateHomeProjects<
+  T extends { worktree: string; expanded: boolean },
+  U extends { worktree: string; sandboxes?: string[] },
+>(local: T[], synced: U[]) {
+  const byWorktree = new Map(synced.map((project) => [pathKey(project.worktree), project] as const))
+  const bySandbox = new Map(
+    synced.flatMap((project) => (project.sandboxes ?? []).map((sandbox) => [pathKey(sandbox), project] as const)),
+  )
+  const result = new Map<string, T | (T & U)>()
+
+  for (const project of local) {
+    const match = byWorktree.get(pathKey(project.worktree)) ?? bySandbox.get(pathKey(project.worktree))
+    const hydrated = match
+      ? {
+          ...project,
+          ...match,
+          worktree: match.worktree,
+          expanded: project.expanded,
+        }
+      : project
+    if (!result.has(pathKey(hydrated.worktree))) result.set(pathKey(hydrated.worktree), hydrated)
+  }
+
+  return [...result.values()]
+}
+
+type HomeSessionProject = { id?: string; worktree: string; sandboxes?: string[] }
+
+export function homeProjectSessionDirectories(project: HomeSessionProject) {
+  if (project.id === "global") return [project.worktree]
+  return [project.worktree, ...(project.sandboxes ?? [])]
+}
+
+export function homeSessionDirectory(directory: string, projects: HomeSessionProject[]) {
+  const project = projects.find(
+    (project) =>
+      pathKey(project.worktree) === pathKey(directory) ||
+      project.sandboxes?.some((sandbox) => pathKey(sandbox) === pathKey(directory)),
+  )
+  if (project?.id === "global") return project.worktree
+  return directory
 }
 
 export function homeSessionServerStatus(active: boolean, status: () => { working: boolean; tint?: string }) {

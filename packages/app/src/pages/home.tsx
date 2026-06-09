@@ -32,9 +32,12 @@ import {
   getProjectAvatarSource,
   homeProjectDirectories,
   homeProjectNavigation,
+  homeProjectSessionDirectories,
+  homeSessionDirectory,
   type HomeProjectSelection,
+  hydrateHomeProjects,
   projectForSession,
-  sortedRootSessions,
+  sortedHomeRootSessions,
   toggleHomeProjectSelection,
 } from "@/pages/layout/helpers"
 import { useSessionTabAvatarState } from "@/pages/layout/project-avatar-state"
@@ -93,7 +96,9 @@ function buildHomeSessionRecords(input: {
     ...new Map(
       input
         .projectDirectories()
-        .flatMap((directory) => sortedRootSessions(input.sync.child(directory, { bootstrap: false })[0], Date.now()))
+        .flatMap((directory) =>
+          sortedHomeRootSessions(input.sync.child(directory, { bootstrap: false })[0], Date.now(), input.projects()),
+        )
         .map((session) => [`${pathKey(session.directory)}:${session.id}`, session] as const),
     ).values(),
   ]
@@ -157,7 +162,8 @@ function HomeDesign() {
     return global.createServerCtx(conn)
   })
   const focusedSync = () => focusedServerCtx()?.sync ?? sync
-  const projects = createMemo(() => focusedServerCtx()?.projects.list() ?? layout.projects.list())
+  const localProjects = createMemo(() => focusedServerCtx()?.projects.list() ?? layout.projects.list())
+  const projects = createMemo(() => hydrateHomeProjects(localProjects(), focusedSync().data.project))
   const selectedProject = createMemo(() => projects().find((project) => project.worktree === state.selection.directory))
   const newSessionProject = createMemo(
     () =>
@@ -172,14 +178,14 @@ function HomeDesign() {
         .filter((tab) => tab.server === state.selection.server)
         .flatMap((tab) => {
           const directory = decode64(tab.dirBase64)
-          return directory ? [directory] : []
+          return directory ? [homeSessionDirectory(directory, projects())] : []
         }),
     ),
   )
   const projectDirectories = createMemo(() => {
     const project = selectedProject()
-    if (!project) return uniqueDirectories([...projects().flatMap(directories), ...openTabDirectories()])
-    return uniqueDirectories([...directories(project), ...openTabDirectories()])
+    if (!project) return uniqueDirectories([...projects().flatMap(homeProjectSessionDirectories), ...openTabDirectories()])
+    return uniqueDirectories([...homeProjectSessionDirectories(project), ...openTabDirectories()])
   })
   const search = createMemo(() => state.search.trim())
   const sessionLoad = useQuery(() => ({
@@ -246,6 +252,13 @@ function HomeDesign() {
     if (list.some((conn) => ServerConnection.key(conn) === state.selection.server)) return
     const conn = list.find((conn) => ServerConnection.key(conn) === server.key) ?? list[0]
     if (conn) setSelection({ server: ServerConnection.key(conn) })
+  })
+
+  createEffect(() => {
+    const directory = state.selection.directory
+    if (!directory) return
+    const project = projects().find((project) => project.sandboxes?.some((sandbox) => pathKey(sandbox) === pathKey(directory)))
+    if (project && project.worktree !== directory) setState("selection", "directory", project.worktree)
   })
 
   createEffect(() => {

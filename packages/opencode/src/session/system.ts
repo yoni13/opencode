@@ -58,6 +58,7 @@ export const layer = Layer.effect(
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
+            `For Python work, prefer uv for script execution and dependency handling. Use commands like \`uv run python script.py\`, \`uv run --with package python script.py\`, or \`uvx tool-name\` instead of ad-hoc global pip installs unless the task requires otherwise.`,
           ].join("\n"),
         ]
       }),

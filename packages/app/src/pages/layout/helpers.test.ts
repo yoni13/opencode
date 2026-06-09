@@ -16,8 +16,12 @@ import {
   hasProjectPermissions,
   homeProjectNavigation,
   homeProjectDirectories,
+  homeProjectSessionDirectories,
+  homeSessionDirectory,
   homeSessionServerStatus,
+  hydrateHomeProjects,
   latestRootSession,
+  sortedHomeRootSessions,
   toggleHomeProjectSelection,
 } from "./helpers"
 import { pathKey } from "@/utils/path-key"
@@ -293,6 +297,124 @@ describe("layout workspace helpers", () => {
     expect(homeProjectDirectories(["/first", "/second"])).toEqual(["/first", "/second"])
     expect(homeProjectDirectories("/only")).toEqual(["/only"])
     expect(homeProjectDirectories(null)).toEqual([])
+  })
+
+  test("hydrates home projects with synced sandbox metadata", () => {
+    const result = hydrateHomeProjects(
+      [{ worktree: "/root/blank", expanded: true }],
+      [
+        {
+          id: "global",
+          worktree: "/root/blank",
+          sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+        },
+      ],
+    )
+
+    expect(result).toEqual([
+      {
+        id: "global",
+        worktree: "/root/blank",
+        expanded: true,
+        sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+      },
+    ])
+  })
+
+  test("collapses stale docker workspace home projects to their synced worktree", () => {
+    const result = hydrateHomeProjects(
+      [{ worktree: "/root/.local/share/opencode/docker-workspace/wrk_123/workspace", expanded: true }],
+      [
+        {
+          id: "global",
+          worktree: "/root/blank",
+          sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+        },
+      ],
+    )
+
+    expect(result).toEqual([
+      {
+        id: "global",
+        worktree: "/root/blank",
+        expanded: true,
+        sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+      },
+    ])
+  })
+
+  test("loads global project sessions from the worktree instead of docker sandboxes", () => {
+    expect(
+      homeProjectSessionDirectories({
+        id: "global",
+        worktree: "/root/blank",
+        sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+      }),
+    ).toEqual(["/root/blank"])
+  })
+
+  test("normalizes open docker tab directories to the global worktree for home session loads", () => {
+    expect(
+      homeSessionDirectory("/root/.local/share/opencode/docker-workspace/wrk_123/workspace", [
+        {
+          id: "global",
+          worktree: "/root/blank",
+          sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+        },
+      ]),
+    ).toBe("/root/blank")
+  })
+
+  test("shows project-scoped docker sessions loaded through the global worktree", () => {
+    const result = sortedHomeRootSessions(
+      {
+        path: { directory: "/root/blank" },
+        session: [
+          session({
+            id: "docker-session",
+            projectID: "global",
+            directory: "/root/.local/share/opencode/docker-workspace/wrk_123/workspace",
+            time: { created: 10, updated: 10, archived: undefined },
+          }),
+        ],
+      },
+      120_000,
+      [
+        {
+          id: "global",
+          worktree: "/root/blank",
+          sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+        },
+      ],
+    )
+
+    expect(result.map((item) => item.id)).toEqual(["docker-session"])
+  })
+
+  test("does not show unrelated project-scoped docker sessions on another worktree", () => {
+    const result = sortedHomeRootSessions(
+      {
+        path: { directory: "/root/blank" },
+        session: [
+          session({
+            id: "other-project",
+            projectID: "other",
+            directory: "/root/.local/share/opencode/docker-workspace/wrk_123/workspace",
+            time: { created: 10, updated: 10, archived: undefined },
+          }),
+        ],
+      },
+      120_000,
+      [
+        {
+          id: "global",
+          worktree: "/root/blank",
+          sandboxes: ["/root/.local/share/opencode/docker-workspace/wrk_123/workspace"],
+        },
+      ],
+    )
+
+    expect(result).toEqual([])
   })
 
   test("hides status derived from an inactive server", () => {
