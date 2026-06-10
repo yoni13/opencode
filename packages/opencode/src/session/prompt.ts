@@ -1564,8 +1564,26 @@ export const layer = Layer.effect(
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            const result = yield* handle
-              .process({
+            const settleTimedOutProviderTurn = (message: string) =>
+              Effect.gen(function* () {
+                handle.message.error = MessageV2.fromError(new Error(message), {
+                  providerID: handle.message.providerID,
+                })
+                handle.message.finish = "error"
+                handle.message.time.completed = Date.now()
+                yield* sessions.updateMessage(handle.message)
+                return "stop" as const
+              })
+            const noOutputWatchdog = Effect.gen(function* () {
+              yield* Effect.sleep("45 seconds")
+              const emittedParts = yield* MessageV2.parts(handle.message.id).pipe(
+                Effect.provideService(Database.Service, database),
+              )
+              if (handle.message.finish || handle.message.error || emittedParts.length > 0) return yield* Effect.never
+              return yield* settleTimedOutProviderTurn("Provider turn timed out before producing any response")
+            })
+            const result = yield* Effect.raceFirst(
+              handle.process({
                 user: lastUser,
                 agent,
                 permission: session.permission,
@@ -1576,22 +1594,14 @@ export const layer = Layer.effect(
                 tools,
                 model,
                 toolChoice: format.type === "json_schema" ? "required" : undefined,
-              })
-              .pipe(
-                Effect.timeout("5 minutes"),
-                Effect.catchTag("TimeoutError", () =>
-                  Effect.gen(function* () {
-                    handle.message.error = MessageV2.fromError(
-                      new Error("Provider turn timed out before producing a complete response"),
-                      { providerID: handle.message.providerID },
-                    )
-                    handle.message.finish = "error"
-                    handle.message.time.completed = Date.now()
-                    yield* sessions.updateMessage(handle.message)
-                    return "stop" as const
-                  }),
-                ),
-              )
+              }),
+              noOutputWatchdog,
+            ).pipe(
+              Effect.timeout("5 minutes"),
+              Effect.catchTag("TimeoutError", () =>
+                settleTimedOutProviderTurn("Provider turn timed out before producing a complete response"),
+              ),
+            )
 
             const emittedParts = yield* MessageV2.parts(handle.message.id).pipe(
               Effect.provideService(Database.Service, database),
