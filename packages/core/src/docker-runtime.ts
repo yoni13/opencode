@@ -164,7 +164,6 @@ export function assertContainerOwnership(runtime: WorkspaceExtra, container: Con
   )
   const expected = [
     [runtime.workspacePath, runtime.hostDirectory, true],
-    ["/tmp", runtime.hostDirectory, true],
     [DOCKER_CONFIG_PATH, runtime.configDirectory, false],
     ["/root/.agents", path.join(runtime.configDirectory, ".agents"), false],
     ["/root/.claude", path.join(runtime.configDirectory, ".claude"), false],
