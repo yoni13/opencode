@@ -66,6 +66,7 @@ import { LLMEvent } from "@opencode-ai/llm"
 import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
 import { DockerFiles } from "@opencode-ai/core/docker-files"
 import { isMedia } from "@/util/media"
+import type { InstanceContext } from "@/project/instance-context"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -177,6 +178,14 @@ export const layer = Layer.effect(
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
+    })
+    const messagePath = Effect.fn("SessionPrompt.messagePath")(function* (ctx: InstanceContext) {
+      const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+      if (!runtime) return { cwd: ctx.directory, root: ctx.worktree }
+      return {
+        cwd: DockerRuntime.containerPath(runtime, ctx.directory),
+        root: runtime.workspacePath,
+      }
     })
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
@@ -364,7 +373,7 @@ export const layer = Layer.effect(
         mode: task.agent,
         agent: task.agent,
         variant: lastUser.model.variant,
-        path: { cwd: ctx.directory, root: ctx.worktree },
+        path: yield* messagePath(ctx),
         cost: 0,
         tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
         modelID: taskModel.id,
@@ -581,7 +590,7 @@ export const layer = Layer.effect(
               mode: input.agent,
               agent: input.agent,
               cost: 0,
-              path: { cwd: ctx.directory, root: ctx.worktree },
+              path: yield* messagePath(ctx),
               time: { created: Date.now() },
               role: "assistant",
               tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -1474,7 +1483,7 @@ export const layer = Layer.effect(
             mode: agent.name,
             agent: agent.name,
             variant: lastUser.model.variant,
-            path: { cwd: ctx.directory, root: ctx.worktree },
+            path: yield* messagePath(ctx),
             cost: 0,
             tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
             modelID: model.id,
