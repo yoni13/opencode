@@ -402,6 +402,26 @@ async function sharedCacheMounts() {
   return mounts.flatMap(([name, target]) => ["-v", `${path.join(sharedCacheRoot(), name)}:${target}`])
 }
 
+async function optionalReverseEngineeringMounts() {
+  const mounts = [
+    ["/root/ctf/tools/idamcp", "/root/ctf/tools/idamcp", "ro"],
+    ["/root/ctf/tools/ida-pro-9.2", "/root/ctf/tools/ida-pro-9.2", "ro"],
+    ["/root/.idapro", "/root/.idapro", "rw"],
+  ] as const
+  return (
+    await Promise.all(
+      mounts.map(async ([source, target, mode]) => {
+        const exists = await fs
+          .stat(source)
+          .then(() => true)
+          .catch(() => false)
+        if (!exists) return []
+        return ["-v", `${source}:${target}:${mode}`]
+      }),
+    )
+  ).flat()
+}
+
 async function startContainer(extra: DockerWorkspaceExtra, setup: string | undefined) {
   await assertWorkspacePaths(extra)
   await ensureImage(extra.image, setup)
@@ -426,6 +446,7 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
     "-v",
     `${path.join(extra.configDirectory, ".claude")}:/root/.claude:ro`,
     ...(await sharedCacheMounts()),
+    ...(await optionalReverseEngineeringMounts()),
     "-e",
     `OPENCODE_CONFIG_DIR=${DOCKER_CONFIG_PATH}`,
     extra.image,

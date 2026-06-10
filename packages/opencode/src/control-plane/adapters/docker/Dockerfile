@@ -15,6 +15,7 @@ ENV npm_config_update_notifier=false
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
+    binutils \
     ca-certificates \
     curl \
     fd-find \
