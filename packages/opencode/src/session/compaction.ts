@@ -25,6 +25,8 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { EventV2 } from "@opencode-ai/core/event"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
+import { DockerRuntime } from "@opencode-ai/core/docker-runtime"
+import type { InstanceContext } from "@/project/instance-context"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -70,6 +72,16 @@ function summaryText(message: SessionV1.WithParts) {
     .trim()
   return text || undefined
 }
+
+const messagePath = Effect.fn("SessionCompaction.messagePath")(function* (ctx: InstanceContext) {
+  const docker = yield* Effect.serviceOption(DockerRuntime.Service)
+  const runtime = docker._tag === "Some" ? yield* docker.value.resolve(yield* InstanceState.workspaceID) : undefined
+  if (!runtime) return { cwd: ctx.directory, root: ctx.worktree }
+  return {
+    cwd: DockerRuntime.containerPath(runtime, ctx.directory),
+    root: runtime.workspacePath,
+  }
+})
 
 function completedCompactions(messages: SessionV1.WithParts[]) {
   const users = new Map<MessageID, number>()
@@ -384,10 +396,7 @@ export const layer = Layer.effect(
         agent: "compaction",
         variant: userMessage.model.variant,
         summary: true,
-        path: {
-          cwd: ctx.directory,
-          root: ctx.worktree,
-        },
+        path: yield* messagePath(ctx),
         cost: 0,
         tokens: {
           output: 0,

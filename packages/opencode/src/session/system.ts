@@ -60,6 +60,14 @@ export const layer = Layer.effect(
             `<env>`,
             `  Working directory: ${cwd}`,
             `  Workspace root folder: ${root}`,
+            ...(runtime
+              ? [
+                  `  Docker sandbox: yes`,
+                  `  Docker container name: ${runtime.container}`,
+                  `  You are running inside an Ubuntu/Debian Docker container as root. Install packages with apt or other appropriate package managers when the task requires them.`,
+                  `  Use ${runtime.workspacePath} or relative paths for shell, file, MCP, and LSP operations. Host docker-workspace paths are not available inside the container.`,
+                ]
+              : []),
             `  Is directory a git repo: ${ctx.project.vcs === "git" ? "yes" : "no"}`,
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
