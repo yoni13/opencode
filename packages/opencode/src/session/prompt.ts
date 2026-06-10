@@ -1577,6 +1577,19 @@ export const layer = Layer.effect(
               toolChoice: format.type === "json_schema" ? "required" : undefined,
             })
 
+            const emittedParts = yield* MessageV2.parts(handle.message.id).pipe(
+              Effect.provideService(Database.Service, database),
+            )
+            if (!handle.message.finish && !handle.message.error && emittedParts.length === 0) {
+              handle.message.error = MessageV2.fromError(new Error("Provider stream ended without assistant output"), {
+                providerID: handle.message.providerID,
+              })
+              handle.message.finish = "error"
+              handle.message.time.completed = Date.now()
+              yield* sessions.updateMessage(handle.message)
+              return "break" as const
+            }
+
             if (structured !== undefined) {
               handle.message.structured = structured
               handle.message.finish = handle.message.finish ?? "stop"
