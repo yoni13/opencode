@@ -64,6 +64,8 @@ COPY setup.sh /tmp/opencode-docker-setup.sh
 RUN /bin/bash /tmp/opencode-docker-setup.sh \
   && rm -f /tmp/opencode-docker-setup.sh
 
+RUN ln -sfn /workspace /tmp/opencode
+
 WORKDIR /workspace
 
 CMD ["sleep", "infinity"]
