@@ -440,6 +440,8 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
     "-v",
     `${extra.hostDirectory}:${extra.workspacePath}`,
     "-v",
+    `${extra.hostDirectory}:/tmp`,
+    "-v",
     `${extra.configDirectory}:${DOCKER_CONFIG_PATH}:ro`,
     "-v",
     `${path.join(extra.configDirectory, ".agents")}:/root/.agents:ro`,
