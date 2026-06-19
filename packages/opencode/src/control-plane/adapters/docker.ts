@@ -37,6 +37,8 @@ export type DockerWorkspaceStats = {
   running: boolean
   idleStopDisabled: boolean
   imageSizeBytes?: number
+  workspaceSizeBytes?: number
+  totalSizeBytes?: number
   memoryUsageBytes?: number
   memoryLimitBytes?: number
   memoryPercent?: number
@@ -270,6 +272,12 @@ async function dockerWorkspaceStat(workspaceID: WorkspaceV2.ID, extra: DockerWor
         .then((value) => parseContainerStats(value.stdout))
         .catch(() => undefined)
     : undefined
+  const imageSizeBytes = await docker(["image", "inspect", extra.image, "--format", "{{json .Size}}"])
+    .then((value) => Number.parseInt(value.stdout.trim(), 10))
+    .then((value) => (Number.isFinite(value) ? value : undefined))
+    .catch(() => undefined)
+  const workspaceSizeBytes = await directorySize(extra.hostDirectory)
+  const totalSizeBytes = (imageSizeBytes ?? 0) + (workspaceSizeBytes ?? 0)
   return {
     workspaceID,
     container: extra.container,
@@ -277,14 +285,20 @@ async function dockerWorkspaceStat(workspaceID: WorkspaceV2.ID, extra: DockerWor
     status: inspect?.State?.Status ?? "missing",
     running: inspect?.State?.Running === true,
     idleStopDisabled: extra.idleStopDisabled === true,
-    imageSizeBytes: await docker(["image", "inspect", extra.image, "--format", "{{json .Size}}"])
-      .then((value) => Number.parseInt(value.stdout.trim(), 10))
-      .then((value) => (Number.isFinite(value) ? value : undefined))
-      .catch(() => undefined),
+    imageSizeBytes,
+    workspaceSizeBytes,
+    totalSizeBytes,
     memoryUsageBytes: stats?.memoryUsageBytes,
     memoryLimitBytes: stats?.memoryLimitBytes,
     memoryPercent: stats?.memoryPercent,
   }
+}
+
+async function directorySize(directory: string) {
+  return run("du", ["-sb", directory])
+    .then((value) => Number.parseInt(value.stdout.trim().split(/\s+/, 1)[0] ?? "", 10))
+    .then((value) => (Number.isFinite(value) ? value : undefined))
+    .catch(() => undefined)
 }
 
 type ContainerStatInspect = {
@@ -517,8 +531,11 @@ export const DockerAdapter: WorkspaceAdapter = {
 
     DockerRuntime.clearIdleStop(extra)
     await assertWorkspacePaths(extra)
-    await removeContainer(extra)
-    await fs.rm(path.dirname(extra.hostDirectory), { recursive: true, force: true })
+    try {
+      await removeContainer(extra)
+    } finally {
+      await fs.rm(path.dirname(extra.hostDirectory), { recursive: true, force: true })
+    }
   },
   async target(info) {
     const extra = requireDockerExtra(info)

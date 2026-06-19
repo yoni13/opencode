@@ -35,6 +35,7 @@ export interface ImageAttachmentPart {
   filename: string
   mime: string
   dataUrl: string
+  pending?: boolean
 }
 
 export type ContentPart = TextPart | FileAttachmentPart | AgentPart | ImageAttachmentPart

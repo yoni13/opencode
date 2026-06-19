@@ -103,8 +103,8 @@ export default function DockerPage() {
   )
   const orphanRows = createMemo(() => rows().filter((row) => row.stat.workspaceID.startsWith("wrk_") && !row.session))
   const running = createMemo(() => rows().filter((row) => row.stat.running).length)
-  const imageBytes = createMemo(() =>
-    rows().reduce((total, row) => total + (finiteNumber(row.stat.imageSizeBytes) ?? 0), 0),
+  const diskBytes = createMemo(() =>
+    rows().reduce((total, row) => total + (finiteNumber(row.stat.totalSizeBytes) ?? 0), 0),
   )
   const memoryBytes = createMemo(() =>
     rows().reduce((total, row) => total + (finiteNumber(row.stat.memoryUsageBytes) ?? 0), 0),
@@ -209,7 +209,7 @@ export default function DockerPage() {
         <div class="grid grid-cols-2 gap-3 py-5 md:grid-cols-4">
           <DockerMetric label="Containers" value={String(rows().length)} />
           <DockerMetric label="Running" value={String(running())} />
-          <DockerMetric label="Image size" value={formatBytes(imageBytes())} />
+          <DockerMetric label="Disk" value={formatBytes(diskBytes())} />
           <DockerMetric label="RAM" value={formatBytes(memoryBytes())} />
         </div>
 
@@ -230,7 +230,7 @@ export default function DockerPage() {
                   <DockerHeader label="Container" />
                   <DockerHeader label="Status" />
                   <DockerHeader label="RAM" />
-                  <DockerHeader label="Image size" />
+                  <DockerHeader label="Disk" />
                   <DockerHeader label="Auto-stop setting" />
                   <DockerHeader label="Actions" />
                 </tr>
@@ -282,7 +282,15 @@ export default function DockerPage() {
                             <span class="text-[11px] text-v2-text-text-faint">{formatPercent(row.stat.memoryPercent)}</span>
                           </div>
                         </td>
-                        <td class="px-4 py-3 align-middle text-v2-text-text-muted">{formatBytes(row.stat.imageSizeBytes)}</td>
+                        <td class="px-4 py-3 align-middle text-v2-text-text-muted">
+                          <div class="flex flex-col gap-1">
+                            <span>{formatBytes(row.stat.totalSizeBytes)}</span>
+                            <span class="text-[11px] text-v2-text-text-faint">
+                              image {formatBytes(row.stat.imageSizeBytes)} / workspace{" "}
+                              {formatBytes(row.stat.workspaceSizeBytes)}
+                            </span>
+                          </div>
+                        </td>
                         <td class="px-4 py-3 align-middle">
                           <div class="flex min-w-[150px] items-center gap-3">
                             <Switch

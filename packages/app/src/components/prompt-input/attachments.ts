@@ -8,21 +8,18 @@ import { getCursorPosition } from "./editor-dom"
 import { attachmentMime } from "./files"
 import { normalizePaste, pasteMode } from "./paste"
 
-function dataUrl(file: File, mime: string) {
-  return new Promise<string>((resolve) => {
-    const reader = new FileReader()
-    reader.addEventListener("error", () => resolve(""))
-    reader.addEventListener("load", () => {
-      const value = typeof reader.result === "string" ? reader.result : ""
-      const idx = value.indexOf(",")
-      if (idx === -1) {
-        resolve(value)
-        return
-      }
-      resolve(`data:${mime};base64,${value.slice(idx + 1)}`)
-    })
-    reader.readAsDataURL(file)
-  })
+const pendingFiles = new Map<string, File>()
+
+export function registerPendingAttachmentFile(id: string, file: File) {
+  pendingFiles.set(id, file)
+}
+
+export function getPendingAttachmentFile(id: string) {
+  return pendingFiles.get(id)
+}
+
+export function removePendingAttachmentFile(id: string) {
+  pendingFiles.delete(id)
 }
 
 type PromptAttachmentsInput = {
@@ -55,15 +52,16 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
     const editor = input.editor()
     if (!editor) return false
 
-    const url = await dataUrl(file, mime)
-    if (!url) return false
+    const id = uuid()
+    registerPendingAttachmentFile(id, file)
 
     const attachment: ImageAttachmentPart = {
       type: "image",
-      id: uuid(),
+      id,
       filename: file.name,
       mime,
-      dataUrl: url,
+      dataUrl: mime.startsWith("image/") ? URL.createObjectURL(file) : "",
+      pending: true,
     }
     const cursor = prompt.cursor() ?? getCursorPosition(editor)
     prompt.set([...prompt.current(), attachment], cursor)
@@ -86,6 +84,9 @@ export function createPromptAttachments(input: PromptAttachmentsInput) {
 
   const removeAttachment = (id: string) => {
     const current = prompt.current()
+    const attachment = current.find((part): part is ImageAttachmentPart => part.type === "image" && part.id === id)
+    if (attachment?.dataUrl.startsWith("blob:")) URL.revokeObjectURL(attachment.dataUrl)
+    removePendingAttachmentFile(id)
     const next = current.filter((part) => part.type !== "image" || part.id !== id)
     prompt.set(next, prompt.cursor())
   }

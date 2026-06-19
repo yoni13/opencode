@@ -22,6 +22,8 @@ export const DockerStats = Schema.Struct({
   running: Schema.Boolean,
   idleStopDisabled: Schema.Boolean,
   imageSizeBytes: Schema.optional(Schema.Number),
+  workspaceSizeBytes: Schema.optional(Schema.Number),
+  totalSizeBytes: Schema.optional(Schema.Number),
   memoryUsageBytes: Schema.optional(Schema.Number),
   memoryLimitBytes: Schema.optional(Schema.Number),
   memoryPercent: Schema.optional(Schema.Number),

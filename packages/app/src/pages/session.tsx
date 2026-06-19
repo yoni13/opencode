@@ -1465,6 +1465,7 @@ export default function Page() {
 
       const ok = await sendFollowupDraft({
         client: sdk.client,
+        serverUrl: sdk.url,
         sync,
         serverSync,
         draft: item,

@@ -21,6 +21,7 @@ import { setCursorPosition } from "./editor-dom"
 import { formatServerError } from "@/utils/server-errors"
 import { ScopedKey } from "@/utils/server-scope"
 import { retry } from "@opencode-ai/core/util/retry"
+import { getPendingAttachmentFile, removePendingAttachmentFile } from "./attachments"
 
 type PendingPrompt = {
   abort: AbortController
@@ -43,6 +44,7 @@ export type FollowupDraft = {
 
 type FollowupSendInput = {
   client: ReturnType<typeof useSDK>["client"]
+  serverUrl: string
   serverSync: ReturnType<typeof useServerSync>
   sync: ReturnType<typeof useSync>
   draft: FollowupDraft
@@ -58,6 +60,71 @@ const draftImages = (prompt: Prompt) => prompt.filter((part): part is ImageAttac
 const byID = <T extends { id: string }>(a: T, b: T) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+type UploadedFile = {
+  path: string
+  url: string
+  mime?: string
+  size: number
+}
+
+async function uploadAttachment(input: { serverUrl: string; sessionID: string; attachment: ImageAttachmentPart }) {
+  if (!input.attachment.pending) return input.attachment
+  const file = getPendingAttachmentFile(input.attachment.id)
+  if (!file) throw new Error(`Attachment "${input.attachment.filename}" is no longer available. Reattach the file.`)
+
+  const url = new URL(`/session/${encodeURIComponent(input.sessionID)}/upload`, input.serverUrl)
+  url.searchParams.set("path", input.attachment.filename || "upload")
+  const response = await fetch(url, {
+    method: "POST",
+    body: file,
+    credentials: "include",
+    headers: {
+      "content-type": input.attachment.mime || file.type || "application/octet-stream",
+    },
+  })
+  if (!response.ok) {
+    const message = await response
+      .json()
+      .then((body) => (typeof body?.error === "string" ? body.error : undefined))
+      .catch(() => undefined)
+    throw new Error(message ?? `Upload failed with HTTP ${response.status}`)
+  }
+
+  const uploaded = (await response.json()) as UploadedFile
+  return {
+    ...input.attachment,
+    pending: false,
+    dataUrl: uploaded.url,
+    filename: uploaded.path.split("/").pop() || input.attachment.filename,
+    mime: uploaded.mime || input.attachment.mime,
+  }
+}
+
+async function uploadPromptAttachments(input: { serverUrl: string; sessionID: string; prompt: Prompt }) {
+  return Promise.all(
+    input.prompt.map(async (part) => {
+      if (part.type !== "image") return part
+      return uploadAttachment({
+        serverUrl: input.serverUrl,
+        sessionID: input.sessionID,
+        attachment: part,
+      })
+    }),
+  )
+}
+
+function cleanupPendingPromptFiles(prompt: Prompt) {
+  for (const part of prompt) {
+    if (part.type !== "image" || !part.pending) continue
+    removePendingAttachmentFile(part.id)
+    if (part.dataUrl.startsWith("blob:")) URL.revokeObjectURL(part.dataUrl)
+  }
+}
+
+function hasPendingPromptFiles(prompt: Prompt) {
+  return prompt.some((part) => part.type === "image" && part.pending)
+}
 
 export async function refreshPromptMessages(input: {
   client: FollowupSendInput["client"]
@@ -126,7 +193,6 @@ async function refreshPromptMessagesUntilSettled(input: Parameters<typeof refres
 
 export async function sendFollowupDraft(input: FollowupSendInput) {
   const text = draftText(input.draft.prompt)
-  const images = draftImages(input.draft.prompt)
   const [, setStore] = input.serverSync.child(input.draft.sessionDirectory)
 
   const setBusy = () => {
@@ -154,6 +220,12 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         setIdle()
         return false
       }
+      const prompt = await uploadPromptAttachments({
+        serverUrl: input.serverUrl,
+        sessionID: input.draft.sessionID,
+        prompt: input.draft.prompt,
+      })
+      const images = draftImages(prompt)
 
       await input.client.session.command({
         sessionID: input.draft.sessionID,
@@ -181,6 +253,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         serverSync: input.serverSync,
         directory: input.draft.sessionDirectory,
       }).catch(() => {})
+      cleanupPendingPromptFiles(input.draft.prompt)
       return true
     } catch (err) {
       setIdle()
@@ -189,9 +262,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
   }
 
   const messageID = input.messageID ?? Identifier.ascending("message")
+  const hasPendingFiles = hasPendingPromptFiles(input.draft.prompt)
+  const uploadedPrompt = hasPendingFiles
+    ? undefined
+    : input.draft.prompt
+  const draft = uploadedPrompt ? { ...input.draft, prompt: uploadedPrompt } : undefined
+  const images = draft ? draftImages(draft.prompt) : []
   const { requestParts, optimisticParts } = buildRequestParts({
-    prompt: input.draft.prompt,
-    context: input.draft.context,
+    prompt: draft?.prompt ?? input.draft.prompt,
+    context: draft?.context ?? input.draft.context,
     images,
     text,
     sessionID: input.draft.sessionID,
@@ -223,35 +302,73 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       messageID,
     })
 
-  batch(() => {
-    setBusy()
-    add()
-  })
+  if (!hasPendingFiles) {
+    batch(() => {
+      setBusy()
+      add()
+    })
+  }
 
   try {
     if (!(await wait())) {
       batch(() => {
         setIdle()
-        remove()
+        if (!hasPendingFiles) remove()
       })
       return false
     }
 
+    const readyDraft = hasPendingFiles
+      ? {
+          ...input.draft,
+          prompt: await uploadPromptAttachments({
+            serverUrl: input.serverUrl,
+            sessionID: input.draft.sessionID,
+            prompt: input.draft.prompt,
+          }),
+        }
+      : input.draft
+    const readyImages = draftImages(readyDraft.prompt)
+    const readyParts = hasPendingFiles
+      ? buildRequestParts({
+          prompt: readyDraft.prompt,
+          context: readyDraft.context,
+          images: readyImages,
+          text,
+          sessionID: readyDraft.sessionID,
+          messageID,
+          sessionDirectory: readyDraft.sessionDirectory,
+        })
+      : { requestParts, optimisticParts }
+
+    if (hasPendingFiles) {
+      batch(() => {
+        setBusy()
+        input.sync.session.optimistic.add({
+          directory: readyDraft.sessionDirectory,
+          sessionID: readyDraft.sessionID,
+          message,
+          parts: readyParts.optimisticParts,
+        })
+      })
+    }
+
     await input.client.session.promptAsync({
-      sessionID: input.draft.sessionID,
-      agent: input.draft.agent,
-      model: input.draft.model,
+      sessionID: readyDraft.sessionID,
+      agent: readyDraft.agent,
+      model: readyDraft.model,
       messageID,
-      parts: requestParts,
-      variant: input.draft.variant,
+      parts: readyParts.requestParts,
+      variant: readyDraft.variant,
     })
     void refreshPromptMessagesUntilSettled({
       client: input.client,
       serverSync: input.serverSync,
-      directory: input.draft.sessionDirectory,
-      sessionID: input.draft.sessionID,
+      directory: readyDraft.sessionDirectory,
+      sessionID: readyDraft.sessionID,
       messageID,
     }).catch(() => {})
+    cleanupPendingPromptFiles(input.draft.prompt)
     return true
   } catch (err) {
     batch(() => {
@@ -601,6 +718,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           serverSync,
           directory: sessionDirectory,
         }).catch(() => {})
+        cleanupPendingPromptFiles(currentPrompt)
       } catch (err) {
         showToast({
           title: language.t("prompt.toast.shellSendFailed.title"),
@@ -625,7 +743,13 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             agent,
             model: `${model.providerID}/${model.modelID}`,
             variant,
-            parts: images.map((attachment) => ({
+            parts: draftImages(
+              await uploadPromptAttachments({
+                serverUrl: sdk.url,
+                sessionID: session.id,
+                prompt: currentPrompt,
+              }),
+            ).map((attachment) => ({
               id: Identifier.ascending("part"),
               type: "file" as const,
               mime: attachment.mime,
@@ -644,6 +768,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             serverSync,
             directory: sessionDirectory,
           }).catch(() => {})
+          cleanupPendingPromptFiles(currentPrompt)
         } catch (err) {
           showToast({
             title: language.t("prompt.toast.commandSendFailed.title"),
@@ -728,6 +853,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     void sendFollowupDraft({
       client,
+      serverUrl: sdk.url,
       sync,
       serverSync,
       draft,
