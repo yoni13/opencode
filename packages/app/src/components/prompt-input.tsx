@@ -65,7 +65,7 @@ import {
   type PromptHistoryStoredEntry,
   promptLength,
 } from "./prompt-input/history"
-import { createPromptSubmit, type FollowupDraft } from "./prompt-input/submit"
+import { createPromptSubmit, type FollowupDraft, type UploadProgress } from "./prompt-input/submit"
 import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
@@ -294,6 +294,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     projectSearch: "",
   })
   const [submitting, setSubmitting] = createSignal(false)
+  const [uploadProgress, setUploadProgress] = createStore<Record<string, UploadProgress | undefined>>({})
 
   const buttonsSpring = useSpring(() => (store.mode === "normal" ? 1 : 0), { visualDuration: 0.2, bounce: 0 })
   const motion = (value: number) => ({
@@ -1144,6 +1145,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onAbort: props.onAbort,
     onSubmit: props.onSubmit,
     onSubmittingChange: setSubmitting,
+    onUploadProgress: (id, progress) => {
+      if (progress) {
+        setUploadProgress(id, progress)
+        return
+      }
+      setUploadProgress(id, undefined)
+    },
   })
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -1503,6 +1511,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               />
               <PromptImageAttachments
                 attachments={imageAttachments()}
+                progress={uploadProgress}
                 onOpen={(attachment) =>
                   dialog.show(() => <ImagePreview src={attachment.dataUrl} alt={attachment.filename} />)
                 }
@@ -1709,6 +1718,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             />
             <PromptImageAttachments
               attachments={imageAttachments()}
+              progress={uploadProgress}
               onOpen={(attachment) =>
                 dialog.show(() => <ImagePreview src={attachment.dataUrl} alt={attachment.filename} />)
               }

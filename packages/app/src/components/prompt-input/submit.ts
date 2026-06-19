@@ -51,6 +51,9 @@ type FollowupSendInput = {
   messageID?: string
   optimisticBusy?: boolean
   before?: () => Promise<boolean> | boolean
+  signal?: AbortSignal
+  onUploaded?: () => void
+  onUploadProgress?: (id: string, progress: UploadProgress | undefined) => void
 }
 
 const draftText = (prompt: Prompt) => prompt.map((part) => ("content" in part ? part.content : "")).join("")
@@ -68,30 +71,34 @@ type UploadedFile = {
   size: number
 }
 
-async function uploadAttachment(input: { serverUrl: string; sessionID: string; attachment: ImageAttachmentPart }) {
+export type UploadProgress = {
+  loaded: number
+  total?: number
+}
+
+type UploadAttachmentInput = {
+  serverUrl: string
+  sessionID: string
+  attachment: ImageAttachmentPart
+  signal?: AbortSignal
+  onProgress?: (id: string, progress: UploadProgress | undefined) => void
+}
+
+async function uploadAttachment(input: UploadAttachmentInput) {
   if (!input.attachment.pending) return input.attachment
   const file = getPendingAttachmentFile(input.attachment.id)
   if (!file) throw new Error(`Attachment "${input.attachment.filename}" is no longer available. Reattach the file.`)
 
   const url = new URL(`/session/${encodeURIComponent(input.sessionID)}/upload`, input.serverUrl)
   url.searchParams.set("path", input.attachment.filename || "upload")
-  const response = await fetch(url, {
-    method: "POST",
-    body: file,
-    credentials: "include",
-    headers: {
-      "content-type": input.attachment.mime || file.type || "application/octet-stream",
-    },
+  input.onProgress?.(input.attachment.id, { loaded: 0, total: file.size || undefined })
+  const uploaded = await uploadFile({
+    url,
+    file,
+    mime: input.attachment.mime || file.type || "application/octet-stream",
+    signal: input.signal,
+    onProgress: (progress) => input.onProgress?.(input.attachment.id, progress),
   })
-  if (!response.ok) {
-    const message = await response
-      .json()
-      .then((body) => (typeof body?.error === "string" ? body.error : undefined))
-      .catch(() => undefined)
-    throw new Error(message ?? `Upload failed with HTTP ${response.status}`)
-  }
-
-  const uploaded = (await response.json()) as UploadedFile
   return {
     ...input.attachment,
     pending: false,
@@ -101,7 +108,73 @@ async function uploadAttachment(input: { serverUrl: string; sessionID: string; a
   }
 }
 
-async function uploadPromptAttachments(input: { serverUrl: string; sessionID: string; prompt: Prompt }) {
+function uploadFile(input: {
+  url: URL
+  file: File
+  mime: string
+  signal?: AbortSignal
+  onProgress: (progress: UploadProgress | undefined) => void
+}) {
+  return new Promise<UploadedFile>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const cleanup = () => input.signal?.removeEventListener("abort", abort)
+    const abort = () => xhr.abort()
+
+    xhr.open("POST", input.url.toString())
+    xhr.withCredentials = true
+    xhr.setRequestHeader("content-type", input.mime)
+    xhr.upload.onprogress = (event) => {
+      input.onProgress({
+        loaded: event.loaded,
+        total: event.lengthComputable ? event.total : undefined,
+      })
+    }
+    xhr.onload = () => {
+      cleanup()
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(uploadErrorMessage(xhr.responseText, xhr.status)))
+        return
+      }
+      try {
+        input.onProgress({ loaded: input.file.size, total: input.file.size || undefined })
+        resolve(JSON.parse(xhr.responseText) as UploadedFile)
+      } catch {
+        reject(new Error("Upload failed: invalid server response"))
+      }
+    }
+    xhr.onerror = () => {
+      cleanup()
+      reject(new Error("Upload failed"))
+    }
+    xhr.onabort = () => {
+      cleanup()
+      reject(new Error("Upload aborted"))
+    }
+    if (input.signal?.aborted) {
+      reject(new Error("Upload aborted"))
+      return
+    }
+    input.signal?.addEventListener("abort", abort, { once: true })
+    xhr.send(input.file)
+  }).finally(() => input.onProgress(undefined))
+}
+
+function uploadErrorMessage(responseText: string, status: number) {
+  if (!responseText) return `Upload failed with HTTP ${status}`
+  try {
+    const body = JSON.parse(responseText)
+    if (typeof body?.error === "string") return body.error
+  } catch {}
+  return `Upload failed with HTTP ${status}`
+}
+
+async function uploadPromptAttachments(input: {
+  serverUrl: string
+  sessionID: string
+  prompt: Prompt
+  signal?: AbortSignal
+  onProgress?: (id: string, progress: UploadProgress | undefined) => void
+}) {
   return Promise.all(
     input.prompt.map(async (part) => {
       if (part.type !== "image") return part
@@ -109,6 +182,8 @@ async function uploadPromptAttachments(input: { serverUrl: string; sessionID: st
         serverUrl: input.serverUrl,
         sessionID: input.sessionID,
         attachment: part,
+        signal: input.signal,
+        onProgress: input.onProgress,
       })
     }),
   )
@@ -224,6 +299,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
         serverUrl: input.serverUrl,
         sessionID: input.draft.sessionID,
         prompt: input.draft.prompt,
+        signal: input.signal,
+        onProgress: input.onUploadProgress,
       })
       const images = draftImages(prompt)
 
@@ -325,6 +402,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
             serverUrl: input.serverUrl,
             sessionID: input.draft.sessionID,
             prompt: input.draft.prompt,
+            signal: input.signal,
+            onProgress: input.onUploadProgress,
           }),
         }
       : input.draft
@@ -342,6 +421,7 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       : { requestParts, optimisticParts }
 
     if (hasPendingFiles) {
+      input.onUploaded?.()
       batch(() => {
         setBusy()
         input.sync.session.optimistic.add({
@@ -400,6 +480,7 @@ type PromptSubmitInput = {
   onAbort?: () => void
   onSubmit?: () => void
   onSubmittingChange?: (submitting: boolean) => void
+  onUploadProgress?: (id: string, progress: UploadProgress | undefined) => void
 }
 
 type CommentItem = {
@@ -734,8 +815,19 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       const commandName = cmdName.slice(1)
       const customCommand = sync.data.command.find((c) => c.name === commandName)
       if (customCommand) {
-        clearInput()
+        const hasPendingFiles = hasPendingPromptFiles(currentPrompt)
+        if (hasPendingFiles) input.onSubmittingChange?.(true)
+        if (!hasPendingFiles) clearInput()
         try {
+          const uploaded = draftImages(
+            await uploadPromptAttachments({
+              serverUrl: sdk.url,
+              sessionID: session.id,
+              prompt: currentPrompt,
+              onProgress: input.onUploadProgress,
+            }),
+          )
+          if (hasPendingFiles) clearInput()
           await client.session.command({
             sessionID: session.id,
             command: commandName,
@@ -743,13 +835,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
             agent,
             model: `${model.providerID}/${model.modelID}`,
             variant,
-            parts: draftImages(
-              await uploadPromptAttachments({
-                serverUrl: sdk.url,
-                sessionID: session.id,
-                prompt: currentPrompt,
-              }),
-            ).map((attachment) => ({
+            parts: uploaded.map((attachment) => ({
               id: Identifier.ascending("part"),
               type: "file" as const,
               mime: attachment.mime,
@@ -776,6 +862,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           })
           restoreInput()
         }
+        input.onSubmittingChange?.(false)
         return
       }
     }
@@ -791,8 +878,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       })
     }
 
+    const hasPendingFiles = hasPendingPromptFiles(currentPrompt)
+
     removeCommentItems(commentItems)
-    clearInput()
+    if (hasPendingFiles) input.onSubmittingChange?.(true)
+    if (!hasPendingFiles) clearInput()
 
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk.scope, sessionDirectory)
@@ -860,19 +950,25 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       messageID,
       optimisticBusy: sessionDirectory === projectDirectory,
       before: waitForWorktree,
-    }).catch((err) => {
-      pending.delete(pendingKey(session.id))
-      if (sessionDirectory === projectDirectory) {
-        sync.set("session_status", session.id, { type: "idle" })
-      }
-      showToast({
-        title: language.t("prompt.toast.promptSendFailed.title"),
-        description: errorMessage(err),
-      })
-      removeOptimisticMessage()
-      restoreCommentItems(commentItems)
-      restoreInput()
+      onUploaded: clearInput,
+      onUploadProgress: input.onUploadProgress,
     })
+      .catch((err) => {
+        pending.delete(pendingKey(session.id))
+        if (sessionDirectory === projectDirectory) {
+          sync.set("session_status", session.id, { type: "idle" })
+        }
+        showToast({
+          title: language.t("prompt.toast.promptSendFailed.title"),
+          description: errorMessage(err),
+        })
+        removeOptimisticMessage()
+        restoreCommentItems(commentItems)
+        restoreInput()
+      })
+      .finally(() => {
+        input.onSubmittingChange?.(false)
+      })
   }
 
   return {
