@@ -24,6 +24,56 @@ import { ModelV2 } from "@opencode-ai/core/model"
 
 const log = Log.create({ service: "session.tools" })
 
+function filePartModality(mime: string) {
+  if (mime.startsWith("image/")) return "image"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  if (mime === "application/pdf") return "pdf"
+}
+
+function modelSupportsFilePart(mime: string, model: Provider.Model) {
+  const modality = filePartModality(mime)
+  if (!modality) return false
+  return model.capabilities.input[modality] === true
+}
+
+function dataUrlPayload(url: string) {
+  const index = url.indexOf(",")
+  return index === -1 ? url : url.slice(index + 1)
+}
+
+function toolModelOutput(output: unknown, model: Provider.Model) {
+  if (typeof output === "string") return { type: "text" as const, value: output }
+  if (typeof output !== "object" || output === null) return { type: "json" as const, value: output as never }
+  const result = output as {
+    output?: unknown
+    attachments?: Array<{ mime: string; url: string; filename?: string }>
+  }
+  const attachments = (result.attachments ?? []).filter((attachment) => {
+    return attachment.url.startsWith("data:") && attachment.url.includes(",")
+  })
+  if (typeof result.output !== "string" || attachments.length === 0)
+    return { type: "json" as const, value: output as never }
+  return {
+    type: "content" as const,
+    value: [
+      { type: "text" as const, text: result.output },
+      ...attachments.map((attachment) =>
+        modelSupportsFilePart(attachment.mime, model)
+          ? {
+              type: "media" as const,
+              mediaType: attachment.mime,
+              data: dataUrlPayload(attachment.url),
+            }
+          : {
+              type: "text" as const,
+              text: `Attached ${attachment.mime} ${attachment.filename ? `"${attachment.filename}" ` : ""}was not sent to the model because the selected model does not support that media input.`,
+            },
+      ),
+    ],
+  }
+}
+
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
@@ -84,6 +134,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     tools[item.id] = tool({
       description: item.description,
       inputSchema: jsonSchema(schema),
+      toModelOutput: ({ output }) => toolModelOutput(output, input.model),
       execute(args, options) {
         return run.promise(
           Effect.gen(function* () {

@@ -12,6 +12,7 @@ import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
 import { Reference } from "@/reference/reference"
+import type { Provider } from "@/provider/provider"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -22,6 +23,19 @@ const SAMPLE_BYTES = 4096
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
 
 class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
+
+function filePartModality(mime: string) {
+  if (mime.startsWith("image/")) return "image"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  if (mime === "application/pdf") return "pdf"
+}
+
+function modelSupportsFilePart(mime: string, model: Provider.Model | undefined) {
+  const modality = filePartModality(mime)
+  if (!modality) return false
+  return model?.capabilities.input[modality] === true
+}
 
 // `offset` and `limit` were originally `z.coerce.number()` — the runtime
 // coercion was useful when the tool was called from a shell but serves no
@@ -308,9 +322,45 @@ export const ReadTool = Tool.define<
           }
         }
         if (kind !== "file") return yield* miss(filepath)
-        const content = new TextDecoder("utf-8", { fatal: false }).decode(
-          yield* DockerFiles.readBytes(runtime, containerFilepath),
-        )
+        const bytes = yield* DockerFiles.readBytes(runtime, containerFilepath)
+        const sample = bytes.subarray(0, SAMPLE_BYTES)
+        const mime = sniffAttachmentMime(sample, FSUtil.mimeType(filepath))
+        const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
+        if (isImage || isPdfAttachment(mime)) {
+          const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
+          const selectedModel = ctx.extra?.["model"] as Provider.Model | undefined
+          if (!modelSupportsFilePart(mime, selectedModel)) {
+            return {
+              title,
+              output: `${msg}, but the selected model does not support ${filePartModality(mime)} input. The file is available at ${containerFilepath}. Use shell or Python tools to inspect it instead.`,
+              metadata: {
+                preview: msg,
+                truncated: false,
+                loaded: [] as string[],
+              },
+            }
+          }
+          return {
+            title,
+            output: msg,
+            metadata: {
+              preview: msg,
+              truncated: false,
+              loaded: [] as string[],
+            },
+            attachments: [
+              {
+                type: "file" as const,
+                mime,
+                url: `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`,
+              },
+            ],
+          }
+        }
+        if (isBinaryFile(filepath, sample)) {
+          return yield* Effect.fail(new Error(`Cannot read binary file: ${containerFilepath}`))
+        }
+        const content = new TextDecoder("utf-8", { fatal: false }).decode(bytes)
         const lines = content.split(/\r?\n/)
         const offset = params.offset || 1
         const limit = params.limit ?? DEFAULT_READ_LIMIT
@@ -393,6 +443,18 @@ export const ReadTool = Tool.define<
       if (isImage || isPdfAttachment(mime)) {
         const bytes = yield* fs.readFile(filepath)
         const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
+        const selectedModel = ctx.extra?.["model"] as Provider.Model | undefined
+        if (!modelSupportsFilePart(mime, selectedModel)) {
+          return {
+            title,
+            output: `${msg}, but the selected model does not support ${filePartModality(mime)} input. The file is available at ${filepath}. Use shell or Python tools to inspect it instead.`,
+            metadata: {
+              preview: msg,
+              truncated: false,
+              loaded: loaded.map((item) => item.filepath),
+            },
+          }
+        }
         return {
           title,
           output: msg,

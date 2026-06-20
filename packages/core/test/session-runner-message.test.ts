@@ -13,6 +13,12 @@ import { DateTime } from "effect"
 const created = DateTime.makeUnsafe(0)
 const id = (value: string) => SessionMessage.ID.make(`msg_${value}`)
 const model = Model.make({ id: "model", provider: "provider", route: OpenAIChat.route })
+const textModel = Model.make({
+  id: "model",
+  provider: "provider",
+  route: OpenAIChat.route,
+  capabilities: { input: ["text"] },
+})
 
 describe("toLLMMessages", () => {
   test("maps every top-level V2 Session message type", () => {
@@ -264,6 +270,62 @@ Recent work
         },
       },
     ])
+  })
+
+  test("does not replay read image bytes to non-vision models", () => {
+    const messages = toLLMMessages(
+      [
+        new SessionMessage.Assistant({
+          id: id("assistant-no-vision"),
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [
+            new SessionMessage.AssistantTool({
+              type: "tool",
+              id: "completed-no-vision",
+              name: "read",
+              state: new SessionMessage.ToolStateCompleted({
+                status: "completed",
+                input: { path: "pixel.png" },
+                content: [
+                  new ToolOutput.TextContent({ type: "text", text: "Image read successfully" }),
+                  new ToolOutput.FileContent({
+                    type: "file",
+                    source: { type: "data", data: "aGVsbG8=" },
+                    mime: "image/png",
+                    name: "pixel.png",
+                  }),
+                ],
+                structured: { type: "media", mime: "image/png" },
+              }),
+              time: { created, completed: created },
+            }),
+          ],
+          time: { created, completed: created },
+        }),
+      ],
+      textModel,
+    )
+
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "completed-no-vision",
+        name: "read",
+        result: {
+          type: "content",
+          value: [
+            { type: "text", text: "Image read successfully" },
+            {
+              type: "text",
+              text: 'Attached image/png "pixel.png" was not sent to the model because the selected model does not support that media input.',
+            },
+          ],
+        },
+      },
+    ])
+    expect(JSON.stringify(messages)).not.toContain("aGVsbG8=")
   })
 
   test("restores OpenAI encrypted reasoning metadata", () => {

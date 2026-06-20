@@ -134,15 +134,21 @@ export namespace ModelLimits {
     input instanceof ModelLimits ? input : new ModelLimits(input ?? {})
 }
 
+type ModelCapabilities = {
+  readonly input: readonly string[]
+}
+
 export class Model {
   readonly id: ModelID
   readonly provider: ProviderID
   readonly route: AnyRoute
+  readonly capabilities?: ModelCapabilities
 
   constructor(input: Model.ConstructorInput) {
     this.id = input.id
     this.provider = input.provider
     this.route = input.route
+    this.capabilities = input.capabilities
   }
 
   static make(input: Model.Input) {
@@ -150,6 +156,7 @@ export class Model {
       id: ModelID.make(input.id),
       provider: ProviderID.make(input.provider),
       route: input.route,
+      capabilities: input.capabilities,
     })
   }
 
@@ -158,6 +165,7 @@ export class Model {
       id: model.id,
       provider: model.provider,
       route: model.route,
+      capabilities: model.capabilities,
     }
   }
 
@@ -175,6 +183,7 @@ export namespace Model {
     readonly id: ModelID
     readonly provider: ProviderID
     readonly route: AnyRoute
+    readonly capabilities?: ModelCapabilities
   }
 
   export type Input = Omit<ConstructorInput, "id" | "provider"> & {

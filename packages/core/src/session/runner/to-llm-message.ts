@@ -6,6 +6,7 @@ import {
   type ContentPart,
   type Model,
   type ProviderMetadata,
+  type ToolContent,
 } from "@opencode-ai/llm"
 import { SessionMessage } from "../message"
 import type { FileAttachment } from "../prompt"
@@ -17,6 +18,36 @@ const media = (file: FileAttachment): ContentPart => ({
   filename: file.name,
   metadata: file.description === undefined ? undefined : { description: file.description },
 })
+
+const modality = (mime: string) => {
+  if (mime.startsWith("image/")) return "image"
+  if (mime.startsWith("audio/")) return "audio"
+  if (mime.startsWith("video/")) return "video"
+  if (mime === "application/pdf") return "pdf"
+}
+
+const supportsMedia = (model: Model, mime: string) => {
+  const input = model.capabilities?.input
+  if (input === undefined) return true
+  const type = modality(mime)
+  if (!type) return false
+  return input.some((item) => item === type || item === mime || item === `${type}/*`)
+}
+
+const modelSafeToolOutput = (tool: SessionMessage.AssistantTool, model: Model): ToolOutput | undefined => {
+  if (tool.state.status !== "completed") return undefined
+  const content = tool.state.content.flatMap((item): ToolContent[] => {
+    if (item.type === "text") return [item]
+    if (supportsMedia(model, item.mime)) return [item]
+    return [
+      {
+        type: "text",
+        text: `Attached ${item.mime} ${item.name ? `"${item.name}" ` : ""}was not sent to the model because the selected model does not support that media input.`,
+      },
+    ]
+  })
+  return ToolOutput.make(tool.state.structured, content)
+}
 
 const toolInput = (tool: SessionMessage.AssistantTool) => {
   if (tool.state.status !== "pending") return tool.state.input
@@ -36,7 +67,11 @@ const toolCall = (tool: SessionMessage.AssistantTool, providerMetadata: Provider
     providerMetadata,
   })
 
-const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: ProviderMetadata | undefined) => {
+const toolResult = (
+  tool: SessionMessage.AssistantTool,
+  providerMetadata: ProviderMetadata | undefined,
+  model: Model,
+) => {
   if (tool.state.status === "completed") {
     // TODO: Materialize remote URL and managed file sources before provider-history lowering.
     // ToolOutput.toResultValue intentionally rejects unmaterialized sources rather than
@@ -44,7 +79,7 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
     const result =
       tool.provider?.executed === true && tool.state.result !== undefined
         ? tool.state.result
-        : ToolOutput.toResultValue({ structured: tool.state.structured, content: tool.state.content })
+        : ToolOutput.toResultValue(modelSafeToolOutput(tool, model) ?? { structured: tool.state.structured, content: [] })
     return ToolResultPart.make({
       id: tool.id,
       name: tool.name,
@@ -80,12 +115,18 @@ const assistant = (message: SessionMessage.Assistant, model: Model) => {
           ? [{ type: "text", text: item.text }]
           : []
     const call = toolCall(item, sameModel ? item.provider?.metadata : undefined)
-    const result = toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined)
+    const result = toolResult(
+      item,
+      sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined,
+      model,
+    )
     return item.provider?.executed === true && result ? [call, result] : [call]
   })
   const results = message.content
     .filter((item): item is SessionMessage.AssistantTool => item.type === "tool" && item.provider?.executed !== true)
-    .map((item) => toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined))
+    .map((item) =>
+      toolResult(item, sameModel ? (item.provider?.resultMetadata ?? item.provider?.metadata) : undefined, model),
+    )
     .filter((message) => message !== undefined)
     .map(Message.tool)
   return [Message.make({ id: message.id, role: "assistant", content, metadata: message.metadata }), ...results]

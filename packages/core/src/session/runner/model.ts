@@ -1,6 +1,6 @@
 export * as SessionRunnerModel from "./model"
 
-import { type Model } from "@opencode-ai/llm"
+import { Model } from "@opencode-ai/llm"
 import * as AnthropicMessages from "@opencode-ai/llm/protocols/anthropic-messages"
 import * as OpenAICompatibleChat from "@opencode-ai/llm/protocols/openai-compatible-chat"
 import * as OpenAIResponses from "@opencode-ai/llm/protocols/openai-responses"
@@ -117,7 +117,12 @@ export const fromCatalogModel = (
 }
 
 export const resolve = (session: SessionSchema.Info, model: ModelV2.Info, provider?: ProviderV2.Info) =>
-  fromCatalogModel(withVariant(model, session.model?.variant), provider)
+  Effect.gen(function* () {
+    const selected = withVariant(model, session.model?.variant)
+    return Model.update(yield* fromCatalogModel(selected, provider), {
+      capabilities: { input: selected.capabilities.input },
+    })
+  })
 
 export const supported = (model: ModelV2.Info) =>
   model.api.type === "aisdk" &&

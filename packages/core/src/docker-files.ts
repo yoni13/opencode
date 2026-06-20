@@ -10,6 +10,16 @@ import path from "node:path"
 export type Runtime = WorkspaceExtra
 
 const MAX_COMMAND_BYTES = 1024 * 1024
+const MAX_MEDIA_INGEST_BYTES = 20 * 1024 * 1024
+
+const startsWith = (bytes: Uint8Array, prefix: number[]) => prefix.every((value, index) => bytes[index] === value)
+const supportedImageMime = (bytes: Uint8Array) => {
+  if (startsWith(bytes, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return "image/png"
+  if (startsWith(bytes, [0xff, 0xd8, 0xff])) return "image/jpeg"
+  if (startsWith(bytes, [0x47, 0x49, 0x46, 0x38])) return "image/gif"
+  if (startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes.subarray(8), [0x57, 0x45, 0x42, 0x50]))
+    return "image/webp"
+}
 
 export function resolvePath(runtime: Runtime, locationDirectory: string, filepath: string) {
   if (path.isAbsolute(filepath)) return DockerRuntime.containerPath(runtime, filepath)
@@ -131,6 +141,17 @@ export function readTool(runtime: Runtime, filepath: string, resource: string) {
     }
     if (kind !== "file") return yield* Effect.die(new Error(`Path not found: ${resource}`))
     const bytes = yield* readBytes(runtime, filepath)
+    const mime = supportedImageMime(bytes)
+    if (mime) {
+      if (bytes.byteLength > MAX_MEDIA_INGEST_BYTES)
+        return yield* Effect.die(new FileSystem.MediaIngestLimitError(resource, MAX_MEDIA_INGEST_BYTES))
+      return new FileSystem.BinaryContent({
+        type: "binary",
+        content: Buffer.from(bytes).toString("base64"),
+        encoding: "base64",
+        mime,
+      })
+    }
     if (isBinary(resource, bytes)) return yield* Effect.die(new FileSystem.BinaryFileError(resource))
     return new FileSystem.TextContent({
       type: "text",
