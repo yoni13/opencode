@@ -436,6 +436,26 @@ async function optionalReverseEngineeringMounts() {
   ).flat()
 }
 
+async function ensurePlaywrightBrowserCache(extra: DockerWorkspaceExtra) {
+  await docker([
+    "exec",
+    extra.container,
+    "sh",
+    "-lc",
+    [
+      "set -eu",
+      "dir=/root/ctf/tools/parallel-browser-mcp",
+      '[ -x "$dir/node_modules/.bin/playwright" ] || exit 0',
+      'cache="${PLAYWRIGHT_BROWSERS_PATH:-/opt/opencode/browser-cache/playwright}"',
+      'revision="$(cd "$dir" && node -e \'const fs = require("fs"); const file = require.resolve("playwright-core/browsers.json"); const browsers = JSON.parse(fs.readFileSync(file, "utf8")).browsers; const item = browsers.find((browser) => browser.name === "chromium-headless-shell") || browsers.find((browser) => browser.name === "chromium"); if (item) process.stdout.write(item.revision)\')"',
+      '[ -n "$revision" ] || exit 0',
+      '[ -e "$cache/chromium_headless_shell-$revision" ] && exit 0',
+      'cd "$dir"',
+      "env -u PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD -u PLAYWRIGHT_SKIP_BROWSER_GC ./node_modules/.bin/playwright install chromium",
+    ].join("\n"),
+  ]).catch(() => undefined)
+}
+
 async function startContainer(extra: DockerWorkspaceExtra, setup: string | undefined) {
   await assertWorkspacePaths(extra)
   await ensureImage(extra.image, setup)
@@ -467,6 +487,7 @@ async function startContainer(extra: DockerWorkspaceExtra, setup: string | undef
     `OPENCODE_CONFIG_DIR=${DOCKER_CONFIG_PATH}`,
     extra.image,
   ])
+  await ensurePlaywrightBrowserCache(extra)
 }
 
 async function ensureContainer(extra: DockerWorkspaceExtra) {
@@ -478,11 +499,13 @@ async function ensureContainer(extra: DockerWorkspaceExtra) {
     return
   }
   if (existing?.running) {
+    await ensurePlaywrightBrowserCache(extra)
     DockerRuntime.scheduleIdleStop(extra)
     return
   }
   if (existing) {
     await docker(["start", extra.container])
+    await ensurePlaywrightBrowserCache(extra)
     DockerRuntime.scheduleIdleStop(extra)
     return
   }
