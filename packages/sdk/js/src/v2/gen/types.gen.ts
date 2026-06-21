@@ -8594,6 +8594,81 @@ export type PermissionRespondResponses = {
 
 export type PermissionRespondResponse = PermissionRespondResponses[keyof PermissionRespondResponses]
 
+export type QuestionSessionReplyData = {
+  body?: {
+    /**
+     * User answers in order of questions (each answer is an array of selected labels)
+     */
+    answers: Array<QuestionAnswer>
+  }
+  path: {
+    sessionID: string
+    questionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/questions/{questionID}/reply"
+}
+
+export type QuestionSessionReplyErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError | QuestionNotFoundError
+   */
+  404: NotFoundError | QuestionNotFoundError
+}
+
+export type QuestionSessionReplyError = QuestionSessionReplyErrors[keyof QuestionSessionReplyErrors]
+
+export type QuestionSessionReplyResponses = {
+  /**
+   * Question answered successfully
+   */
+  200: boolean
+}
+
+export type QuestionSessionReplyResponse = QuestionSessionReplyResponses[keyof QuestionSessionReplyResponses]
+
+export type QuestionSessionRejectData = {
+  body?: never
+  path: {
+    sessionID: string
+    questionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/questions/{questionID}/reject"
+}
+
+export type QuestionSessionRejectErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError | QuestionNotFoundError
+   */
+  404: NotFoundError | QuestionNotFoundError
+}
+
+export type QuestionSessionRejectError = QuestionSessionRejectErrors[keyof QuestionSessionRejectErrors]
+
+export type QuestionSessionRejectResponses = {
+  /**
+   * Question rejected successfully
+   */
+  200: boolean
+}
+
+export type QuestionSessionRejectResponse = QuestionSessionRejectResponses[keyof QuestionSessionRejectResponses]
+
 export type PartDeleteData = {
   body?: never
   path: {

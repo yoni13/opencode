@@ -1,5 +1,7 @@
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
+import { QuestionID } from "@/question/schema"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 
 import { Session } from "@/session/session"
@@ -20,7 +22,7 @@ import {
   WorkspaceRoutingQuery,
   WorkspaceRoutingQueryFields,
 } from "../middleware/workspace-routing"
-import { ApiNotFoundError, PermissionNotFoundError, SessionBusyError } from "../errors"
+import { ApiNotFoundError, PermissionNotFoundError, QuestionNotFoundError, SessionBusyError } from "../errors"
 import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -74,6 +76,11 @@ export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
+export const QuestionReplyPayload = Schema.Struct({
+  answers: Schema.Array(Question.Answer).annotate({
+    description: "User answers in order of questions (each answer is an array of selected labels)",
+  }),
+})
 
 export const SessionPaths = {
   list: root,
@@ -99,6 +106,8 @@ export const SessionPaths = {
   revert: `${root}/:sessionID/revert`,
   unrevert: `${root}/:sessionID/unrevert`,
   permissions: `${root}/:sessionID/permissions/:permissionID`,
+  questionReply: `${root}/:sessionID/questions/:questionID/reply`,
+  questionReject: `${root}/:sessionID/questions/:questionID/reject`,
   deleteMessage: `${root}/:sessionID/message/:messageID`,
   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
@@ -404,6 +413,31 @@ export const SessionApi = HttpApi.make("session")
             summary: "Respond to permission",
             description: "Approve or deny a permission request from the AI assistant.",
             deprecated: true,
+          }),
+        ),
+        HttpApiEndpoint.post("questionReply", SessionPaths.questionReply, {
+          params: { sessionID: SessionID, questionID: QuestionID },
+          query: WorkspaceRoutingQuery,
+          payload: QuestionReplyPayload,
+          success: described(Schema.Boolean, "Question answered successfully"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, QuestionNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "question.sessionReply",
+            summary: "Reply to question request",
+            description: "Provide answers to a question request owned by a session.",
+          }),
+        ),
+        HttpApiEndpoint.post("questionReject", SessionPaths.questionReject, {
+          params: { sessionID: SessionID, questionID: QuestionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Question rejected successfully"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, QuestionNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "question.sessionReject",
+            summary: "Reject question request",
+            description: "Reject a question request owned by a session.",
           }),
         ),
         HttpApiEndpoint.delete("deleteMessage", SessionPaths.deleteMessage, {

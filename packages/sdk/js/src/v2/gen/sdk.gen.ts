@@ -179,6 +179,10 @@ import type {
   QuestionRejectResponses,
   QuestionReplyErrors,
   QuestionReplyResponses,
+  QuestionSessionRejectErrors,
+  QuestionSessionRejectResponses,
+  QuestionSessionReplyErrors,
+  QuestionSessionReplyResponses,
   QuestionV2Reply,
   SessionAbortErrors,
   SessionAbortResponses,
@@ -3224,6 +3228,89 @@ export class Question extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<QuestionRejectResponses, QuestionRejectErrors, ThrowOnError>({
       url: "/question/{requestID}/reject",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Reply to question request
+   *
+   * Provide answers to a question request owned by a session.
+   */
+  public sessionReply<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      questionID: string
+      directory?: string
+      workspace?: string
+      answers?: Array<QuestionAnswer>
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "questionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "answers" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      QuestionSessionReplyResponses,
+      QuestionSessionReplyErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/questions/{questionID}/reply",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Reject question request
+   *
+   * Reject a question request owned by a session.
+   */
+  public sessionReject<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      questionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "questionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      QuestionSessionRejectResponses,
+      QuestionSessionRejectErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/questions/{questionID}/reject",
       ...options,
       ...params,
     })

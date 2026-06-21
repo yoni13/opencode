@@ -209,7 +209,12 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   }
 
   const replyMutation = useMutation(() => ({
-    mutationFn: (answers: QuestionAnswer[]) => sdk.client.question.reply({ requestID: props.request.id, answers }),
+    mutationFn: (answers: QuestionAnswer[]) =>
+      sdk.client.question.sessionReply({
+        sessionID: props.request.sessionID,
+        questionID: props.request.id,
+        answers,
+      }),
     onMutate: () => {
       props.onSubmit()
     },
@@ -221,7 +226,11 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   }))
 
   const rejectMutation = useMutation(() => ({
-    mutationFn: () => sdk.client.question.reject({ requestID: props.request.id }),
+    mutationFn: () =>
+      sdk.client.question.sessionReject({
+        sessionID: props.request.sessionID,
+        questionID: props.request.id,
+      }),
     onMutate: () => {
       props.onSubmit()
     },

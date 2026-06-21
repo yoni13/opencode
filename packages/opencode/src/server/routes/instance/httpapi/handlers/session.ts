@@ -4,6 +4,8 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
+import { QuestionID } from "@/question/schema"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
@@ -29,13 +31,14 @@ import {
   ListQuery,
   MessagesQuery,
   PermissionResponsePayload,
+  QuestionReplyPayload,
   PromptPayload,
   RevertPayload,
   ShellPayload,
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { PermissionNotFoundError, QuestionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 import { Workspace } from "@/control-plane/workspace"
 import { Config } from "@/config/config"
@@ -59,6 +62,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const runState = yield* SessionRunState.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
+    const questionSvc = yield* Question.Service
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
@@ -421,6 +425,46 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return true
     })
 
+    const questionReply = Effect.fn("SessionHttpApi.questionReply")(function* (ctx: {
+      params: { sessionID: SessionID; questionID: QuestionID }
+      payload: typeof QuestionReplyPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* questionSvc
+        .reply({
+          requestID: ctx.params.questionID,
+          answers: ctx.payload.answers,
+        })
+        .pipe(
+          Effect.catchTag("Question.NotFoundError", (error) =>
+            Effect.fail(
+              new QuestionNotFoundError({
+                requestID: String(error.requestID),
+                message: `Question request not found: ${error.requestID}`,
+              }),
+            ),
+          ),
+        )
+      return true
+    })
+
+    const questionReject = Effect.fn("SessionHttpApi.questionReject")(function* (ctx: {
+      params: { sessionID: SessionID; questionID: QuestionID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* questionSvc.reject(ctx.params.questionID).pipe(
+        Effect.catchTag("Question.NotFoundError", (error) =>
+          Effect.fail(
+            new QuestionNotFoundError({
+              requestID: String(error.requestID),
+              message: `Question request not found: ${error.requestID}`,
+            }),
+          ),
+        ),
+      )
+      return true
+    })
+
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
@@ -479,6 +523,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("revert", revert)
       .handle("unrevert", unrevert)
       .handle("permissionRespond", permissionRespond)
+      .handle("questionReply", questionReply)
+      .handle("questionReject", questionReject)
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
