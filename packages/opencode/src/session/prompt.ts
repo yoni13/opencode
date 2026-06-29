@@ -1583,7 +1583,9 @@ export const layer = Layer.effect(
                 yield* sessions.updateMessage(handle.message)
                 return "stop" as const
               })
-            const providerStartTimeout = (yield* config.get()).experimental?.provider_start_timeout ?? 120_000
+            const cfg = yield* config.get()
+            const providerStartTimeout = cfg.experimental?.provider_start_timeout ?? 120_000
+            const providerTurnTimeout = cfg.experimental?.provider_turn_timeout ?? 300_000
             const noOutputWatchdog = Effect.gen(function* () {
               if (providerStartTimeout === false) return yield* Effect.never
               yield* Effect.sleep(providerStartTimeout)
@@ -1593,7 +1595,7 @@ export const layer = Layer.effect(
               if (handle.message.finish || handle.message.error || emittedParts.length > 0) return yield* Effect.never
               return yield* settleTimedOutProviderTurn("Provider turn timed out before producing any response")
             })
-            const result = yield* Effect.raceFirst(
+            const providerTurn = Effect.raceFirst(
               handle.process({
                 user: lastUser,
                 agent,
@@ -1607,12 +1609,15 @@ export const layer = Layer.effect(
                 toolChoice: format.type === "json_schema" ? "required" : undefined,
               }),
               noOutputWatchdog,
-            ).pipe(
-              Effect.timeout("5 minutes"),
-              Effect.catchTag("TimeoutError", () =>
-                settleTimedOutProviderTurn("Provider turn timed out before producing a complete response"),
-              ),
             )
+            const result = yield* (providerTurnTimeout === false
+              ? providerTurn
+              : providerTurn.pipe(
+                  Effect.timeout(`${providerTurnTimeout} millis`),
+                  Effect.catchTag("TimeoutError", () =>
+                    settleTimedOutProviderTurn("Provider turn timed out before producing a complete response"),
+                  ),
+                ))
 
             const emittedParts = yield* MessageV2.parts(handle.message.id).pipe(
               Effect.provideService(Database.Service, database),

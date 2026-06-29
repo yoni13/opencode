@@ -187,6 +187,10 @@ export const Info = Schema.Struct({
         description:
           "Timeout in milliseconds to wait for a provider turn to produce its first assistant output (default: 120000). Set to false to disable this first-output watchdog.",
       }),
+      provider_turn_timeout: Schema.optional(Schema.Union([PositiveInt, Schema.Literal(false)])).annotate({
+        description:
+          "Timeout in milliseconds to wait for a provider turn to complete (default: 300000). Set to false to disable this full-turn watchdog.",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),
