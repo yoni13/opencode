@@ -183,6 +183,10 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      provider_start_timeout: Schema.optional(Schema.Union([PositiveInt, Schema.Literal(false)])).annotate({
+        description:
+          "Timeout in milliseconds to wait for a provider turn to produce its first assistant output (default: 120000). Set to false to disable this first-output watchdog.",
+      }),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),

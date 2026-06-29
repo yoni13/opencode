@@ -1583,8 +1583,10 @@ export const layer = Layer.effect(
                 yield* sessions.updateMessage(handle.message)
                 return "stop" as const
               })
+            const providerStartTimeout = (yield* config.get()).experimental?.provider_start_timeout ?? 120_000
             const noOutputWatchdog = Effect.gen(function* () {
-              yield* Effect.sleep("45 seconds")
+              if (providerStartTimeout === false) return yield* Effect.never
+              yield* Effect.sleep(providerStartTimeout)
               const emittedParts = yield* MessageV2.parts(handle.message.id).pipe(
                 Effect.provideService(Database.Service, database),
               )
